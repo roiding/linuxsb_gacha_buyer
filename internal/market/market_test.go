@@ -5,6 +5,8 @@ import (
 )
 
 // 与线上新版结构一致的卡片样本（徽章为 icon/name/rarity 三段式，含 ZWJ emoji）。
+const catalogPage = `<div class="gacha-all-titles"><h3>全部称号</h3><div class="gacha-all-grid"><div class="gacha-all-item"><span class="gacha-title-badge gacha-title-ssr"><span class="gacha-title-icon">🍀</span><span class="gacha-title-name">欧皇</span><span class="gacha-title-rarity">SSR</span></span></div><div class="gacha-all-item"><span class="gacha-title-badge gacha-title-r"><span class="gacha-title-icon">🏠</span><span class="gacha-title-name">常客</span><span class="gacha-title-rarity">R</span></span></div></div></div>`
+
 const fixturePage = `<!doctype html><html><body><main>
 <article class="gacha-market-card"><div class="gacha-market-title"><span class="gacha-title-badge gacha-title-ssr" style="--gacha-color:var(--warning)"><span class="gacha-title-icon">💎</span><span class="gacha-title-name">氪金大佬</span><span class="gacha-title-rarity">SSR</span></span></div><div class="gacha-market-meta"><span>单价 <strong>300</strong> 积分</span><span>剩余 <strong>1</strong> 个</span><span>剩余时间 <strong>3 天</strong></span></div><form class="gacha-market-buy" method="post" action="/gacha_market_buy"><input type="hidden" name="_csrf" value="a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4"><input type="hidden" name="listing_id" value="21"><input type="number" name="quantity" min="1" max="1" value="1"><button type="submit">购买</button></form></article>
 <article class="gacha-market-card"><div class="gacha-market-title"><span class="gacha-title-badge gacha-title-sr"><span class="gacha-title-icon">👩🏻‍🦰</span><span class="gacha-title-name">万人迷</span><span class="gacha-title-rarity">SR</span></span></div><div class="gacha-market-meta"><span>单价 <strong>50</strong> 积分</span><span>剩余 <strong>3</strong> 个</span><span>剩余时间 <strong>7 天</strong></span></div><form class="gacha-market-buy" method="post" action="/gacha_market_buy"><input type="hidden" name="_csrf" value="a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4"><input type="hidden" name="listing_id" value="20"><input type="number" name="quantity" min="1" value="1"><button type="submit">购买</button></form></article>
@@ -42,6 +44,16 @@ func TestParseMarket(t *testing.T) {
 		if len(l.CSRF) != 64 {
 			t.Errorf("第 %d 条 CSRF 缺失", i)
 		}
+	}
+}
+
+func TestParseTitleCatalog(t *testing.T) {
+	titles, err := ParseTitleCatalog(catalogPage)
+	if err != nil || len(titles) != 2 {
+		t.Fatalf("目录解析失败: %v %+v", err, titles)
+	}
+	if titles[0].Name != "欧皇" || titles[0].Emoji != "🍀" || titles[0].Rarity != SSR {
+		t.Fatalf("SSR 目录项错误: %+v", titles[0])
 	}
 }
 

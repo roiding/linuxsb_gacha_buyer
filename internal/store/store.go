@@ -5,31 +5,10 @@ import (
 	"time"
 
 	"gacha-buyer/internal/db"
-	"gacha-buyer/internal/market"
 )
 
 // Purchase 购买记录（对外模型，与原 JSON 版兼容）。
 type Purchase = db.PurchaseRow
-
-// MarketSnapshot 最近一次市场扫描快照（不含 CSRF，重启后恢复展示）。
-type MarketSnapshot struct {
-	At       time.Time        `json:"at"`
-	Listings []market.Listing `json:"listings"`
-}
-
-// SaveMarketSnapshot 持久化最近一次扫描结果。
-func (s *Store) SaveMarketSnapshot(listings []market.Listing, at time.Time) {
-	_ = s.d.SetJSON("market_snapshot", &MarketSnapshot{At: at, Listings: listings})
-}
-
-// LoadMarketSnapshot 读取持久化的快照；无记录返回 nil。
-func (s *Store) LoadMarketSnapshot() *MarketSnapshot {
-	var snap MarketSnapshot
-	if err := s.d.GetJSON("market_snapshot", &snap); err != nil {
-		return nil
-	}
-	return &snap
-}
 
 // Store 基于 SQLite 的记录存储。
 type Store struct {

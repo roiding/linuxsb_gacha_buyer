@@ -38,17 +38,12 @@ type Engine struct {
 	client *site.Client
 }
 
-// New 创建引擎；恢复上次持久化的市场快照（重启后在售快照仍可见）。
+// New 创建引擎。
 func New(cfg *config.Config, st *store.Store, logf func(string, ...any)) *Engine {
 	if logf == nil {
 		logf = log.Printf
 	}
-	e := &Engine{cfg: cfg, st: st, logf: logf}
-	if snap := st.LoadMarketSnapshot(); snap != nil && len(snap.Listings) > 0 {
-		e.listings = snap.Listings
-		e.lastScanAt = snap.At
-	}
-	return e
+	return &Engine{cfg: cfg, st: st, logf: logf}
 }
 
 // Running 是否在运行。
@@ -135,15 +130,14 @@ type Status struct {
 	LoggedIn   bool              `json:"logged_in"`
 	DryRun     bool              `json:"dry_run"`
 	Points     int               `json:"points"`
-	BudgetUsed int               `json:"budget_used"`
-	BudgetLeft int               `json:"budget_left"`
+	MinBalance int               `json:"min_balance"`
 	ScanCount  int               `json:"scan_count"`
 	BuyOK      int               `json:"buy_ok"`
 	LastScanAt string            `json:"last_scan_at"`
 	LastError  string            `json:"last_error"`
 	Listings   []market.Listing  `json:"listings"`
 	Rules      config.PriceRules `json:"rules"`
-	MaxSpend   int               `json:"max_spend"`
+	SSRPrices  map[string]int    `json:"ssr_prices"`
 }
 
 // Snapshot 返回当前状态（不触发网络）。
@@ -154,17 +148,13 @@ func (e *Engine) Snapshot() Status {
 		Running:    e.running,
 		DryRun:     e.cfg.DryRun,
 		Points:     e.points,
-		BudgetUsed: e.st.TotalSpent(),
+		MinBalance: e.cfg.MinBalance,
 		ScanCount:  e.scanCount,
 		BuyOK:      e.buyCount,
 		Listings:   e.listings,
 		Rules:      e.cfg.Rules,
-		MaxSpend:   e.cfg.MaxSpend,
+		SSRPrices:  e.cfg.SSRPrices,
 		LastError:  e.lastErr,
-	}
-	s.BudgetLeft = e.cfg.MaxSpend - s.BudgetUsed
-	if s.BudgetLeft < 0 {
-		s.BudgetLeft = 0
 	}
 	if !e.lastScanAt.IsZero() {
 		s.LastScanAt = e.lastScanAt.Format("2006-01-02 15:04:05")
@@ -209,8 +199,6 @@ func (e *Engine) scanOnce() {
 	e.lastScanAt = time.Now()
 	e.scanCount++
 	e.mu.Unlock()
-	e.st.SaveMarketSnapshot(listings, e.lastScanAt)
-
 	// 刷新积分与登录态展示
 	if pts, perr := client.FetchPoints(); perr == nil {
 		e.mu.Lock()
@@ -245,67 +233,39 @@ func isSessionLost(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "会话已失效")
 }
 
-// match 按限价规则筛选可买 listing，并做预算与数量裁剪。
+// match 按限价规则筛选可买 listing；数量按在售余量全部尝试。
 func (e *Engine) match(all []market.Listing) []market.Listing {
 	var out []market.Listing
-	spent := e.st.TotalSpent()
-	budgetLeft := e.cfg.MaxSpend - spent
-	if budgetLeft <= 0 {
-		return nil
-	}
-	nListings := 0
 	for _, l := range all {
-		limit := limitFor(e.cfg.Rules, l.Rarity)
+		limit := limitFor(e.cfg, l)
 		if limit <= 0 || l.Price > limit || l.Remain <= 0 {
 			continue
 		}
-		if nListings >= e.cfg.MaxListings {
-			break
-		}
-		qty := l.Remain
-		if qty > e.cfg.MaxBuyOnce {
-			qty = e.cfg.MaxBuyOnce
-		}
-		for qty > 0 && qty*l.Price > budgetLeft {
-			qty--
-		}
-		if qty <= 0 {
-			continue
-		}
-		out = append(out, market.Listing{
-			ListingID: l.ListingID,
-			Name:      l.Name,
-			Emoji:     l.Emoji,
-			Rarity:    l.Rarity,
-			Price:     l.Price,
-			CSRF:      l.CSRF,
-			Remain:    qty, // 复用字段携带本次购买量
-		})
-		budgetLeft -= qty * l.Price
-		nListings++
+		out = append(out, l)
 	}
 	return out
 }
 
-func limitFor(r config.PriceRules, rarity market.Rarity) int {
-	switch rarity {
+func limitFor(cfg *config.Config, l market.Listing) int {
+	if l.Rarity == market.SSR {
+		return cfg.SSRPrices[l.Name]
+	}
+	switch l.Rarity {
 	case market.SR:
-		return r.SR
+		return cfg.Rules.SR
 	case market.R:
-		return r.R
+		return cfg.Rules.R
 	case market.N:
-		return r.N
-	case market.SSR:
-		return r.SSR
+		return cfg.Rules.N
 	case market.UR:
-		return r.UR
+		return cfg.Rules.UR
 	}
 	return 0
 }
 
 // buyOne 执行一次购买并记录。
 func (e *Engine) buyOne(client *site.Client, l market.Listing) {
-	qty := l.Remain // match() 已把购买量放进 Remain
+	qty := l.Remain
 	cost := qty * l.Price
 
 	dup := e.st.LastAttemptAt(l.ListingID)
@@ -313,8 +273,26 @@ func (e *Engine) buyOne(client *site.Client, l market.Listing) {
 		return // 同一 listing 十分钟内不重复尝试
 	}
 
+	e.mu.Lock()
+	minBalance, dryRun := e.cfg.MinBalance, e.cfg.DryRun
+	e.mu.Unlock()
+	if !dryRun {
+		points, err := client.FetchPoints()
+		if err != nil {
+			e.logf("获取余额失败，跳过 %s%s：%v", l.Emoji, l.Name, err)
+			return
+		}
+		e.mu.Lock()
+		e.points = points
+		e.mu.Unlock()
+		if points-cost < minBalance {
+			e.logf("余额保护线拦截 %s%s ×%d：余额 %d，需保留 %d", l.Emoji, l.Name, qty, points, minBalance)
+			return
+		}
+	}
+
 	res := site.BuyResult{Message: "dry-run 跳过下单"}
-	if e.cfg.DryRun {
+	if dryRun {
 		e.logf("[DRY] 将购买 %s%s ×%d @%d = %d 分", l.Emoji, l.Name, qty, l.Price, cost)
 	} else {
 		res = client.Buy(l, qty)
@@ -329,14 +307,14 @@ func (e *Engine) buyOne(client *site.Client, l market.Listing) {
 		Price:     l.Price,
 		Qty:       qty,
 		Cost:      cost,
-		DryRun:    e.cfg.DryRun,
-		OK:        res.OK || e.cfg.DryRun,
+		DryRun:    dryRun,
+		OK:        res.OK || dryRun,
 		Message:   res.Message,
 	}
 	if err := e.st.Add(rec); err != nil {
 		e.logf("记录落盘失败: %v", err)
 	}
-	if res.OK && !e.cfg.DryRun {
+	if res.OK && !dryRun {
 		e.mu.Lock()
 		e.buyCount++
 		e.mu.Unlock()

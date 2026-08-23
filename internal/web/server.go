@@ -15,6 +15,7 @@ import (
 	"gacha-buyer/internal/collector"
 	"gacha-buyer/internal/config"
 	"gacha-buyer/internal/db"
+	"gacha-buyer/internal/market"
 	"gacha-buyer/internal/store"
 )
 
@@ -44,6 +45,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/purchases", s.handlePurchases)
 	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/catalog", s.handleCatalog)
 	mux.HandleFunc("/api/engine/start", s.handleStart)
 	mux.HandleFunc("/api/engine/stop", s.handleStop)
 	mux.HandleFunc("/api/engine/scan", s.handleScanOnce)
@@ -124,24 +126,23 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, map[string]any{
-			"site":         s.cfg.Site,
-			"rules":        s.cfg.Rules,
-			"max_spend":    s.cfg.MaxSpend,
-			"dry_run":      s.cfg.DryRun,
-			"scan_sec":     s.cfg.ScanSec,
-			"max_buy_once": s.cfg.MaxBuyOnce,
-			"max_listings": s.cfg.MaxListings,
-			"listen":       s.cfg.Listen,
+			"site":        s.cfg.Site,
+			"rules":       s.cfg.Rules,
+			"ssr_prices":  s.cfg.SSRPrices,
+			"min_balance": s.cfg.MinBalance,
+			"dry_run":     s.cfg.DryRun,
+			"scan_sec":    s.cfg.ScanSec,
+			"listen":      s.cfg.Listen,
 		})
 	case http.MethodPost:
 		var in struct {
-			Rules       *config.PriceRules `json:"rules"`
-			MaxSpend    *int               `json:"max_spend"`
-			DryRun      *bool              `json:"dry_run"`
-			ScanSec     *int               `json:"scan_sec"`
-			MaxBuyOnce  *int               `json:"max_buy_once"`
-			MaxListings *int               `json:"max_listings"`
+			Rules      *config.PriceRules `json:"rules"`
+			SSRPrices  *map[string]int    `json:"ssr_prices"`
+			MinBalance *int               `json:"min_balance"`
+			DryRun     *bool              `json:"dry_run"`
+			ScanSec    *int               `json:"scan_sec"`
 		}
+
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			httpError(w, 400, "请求体不是合法 JSON")
 			return
@@ -149,20 +150,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if in.Rules != nil {
 			s.cfg.Rules = *in.Rules
 		}
-		if in.MaxSpend != nil && *in.MaxSpend >= 0 {
-			s.cfg.MaxSpend = *in.MaxSpend
+		if in.SSRPrices != nil {
+			s.cfg.SSRPrices = *in.SSRPrices
 		}
+		if in.MinBalance != nil && *in.MinBalance >= 0 {
+			s.cfg.MinBalance = *in.MinBalance
+		}
+
 		if in.DryRun != nil {
 			s.cfg.DryRun = *in.DryRun
 		}
 		if in.ScanSec != nil {
 			s.cfg.ScanSec = *in.ScanSec
-		}
-		if in.MaxBuyOnce != nil && *in.MaxBuyOnce >= 1 {
-			s.cfg.MaxBuyOnce = *in.MaxBuyOnce
-		}
-		if in.MaxListings != nil && *in.MaxListings >= 1 {
-			s.cfg.MaxListings = *in.MaxListings
 		}
 		s.cfg.Normalize()
 		if err := config.Save(s.d, s.cfg); err != nil {
@@ -174,6 +173,30 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpError(w, 405, "方法不允许")
 	}
+}
+
+func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "方法不允许")
+		return
+	}
+	client, _, err := s.mgr.Main()
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	titles, err := client.FetchTitleCatalog()
+	if err != nil {
+		httpError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	ssr := make([]market.Title, 0)
+	for _, t := range titles {
+		if t.Rarity == market.SSR {
+			ssr = append(ssr, t)
+		}
+	}
+	writeJSON(w, map[string]any{"titles": ssr, "prices": s.cfg.SSRPrices})
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {

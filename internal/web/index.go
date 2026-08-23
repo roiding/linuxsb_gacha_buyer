@@ -21,6 +21,7 @@ const indexHTML = `<!doctype html>
       <button data-tab="accounts"><span>◎</span>账号管理</button>
       <button data-tab="transfers"><span>↗</span>归集记录</button>
       <button data-tab="settings"><span>⚙</span>采购设置</button>
+      <button data-tab="ssr"><span>✦</span>SSR定向</button>
     </nav>
     <div class="sidebar-note"><span class="status-dot"></span><div><b>本机运行</b><small>数据仅存于 SQLite</small></div></div>
   </aside>
@@ -33,8 +34,9 @@ const indexHTML = `<!doctype html>
 
     <main>
       <section id="tab-dash" class="tab active">
-        <div class="hero">
-          <div><p class="eyebrow">采购引擎</p><h2>市场状态总览</h2><p>按限价自动扫描在售称号，并通过预算护栏控制总花费。</p></div>
+          <div class="hero">
+          <div><p class="eyebrow">采购引擎</p><h2>市场状态总览</h2><p>按限价自动扫描在售称号，并在每次下单前保留账号保护余额。</p></div>
+
           <div class="hero-actions">
             <button id="btn-start" class="primary">启动收购</button>
             <button id="btn-stop">停止</button>
@@ -43,7 +45,7 @@ const indexHTML = `<!doctype html>
         </div>
         <div class="metrics">
           <article class="metric"><span>当前积分</span><b id="points">—</b><small>主账号可用余额</small></article>
-          <article class="metric"><span>预算使用</span><b id="budget-used">—</b><small>上限 <i id="budget-max">—</i> 积分</small></article>
+          <article class="metric"><span>余额保护线</span><b id="min-balance">—</b><small>购买后至少保留</small></article>
           <article class="metric"><span>在售条数</span><b id="listing-count">—</b><small>最近一次快照</small></article>
           <article class="metric"><span>成交笔数</span><b id="buy-ok">—</b><small>真实采购成功</small></article>
           <article class="metric"><span>最近扫描</span><b id="last-scan" class="metric-time">—</b><small>成功抓取市场时间</small></article>
@@ -119,13 +121,18 @@ const indexHTML = `<!doctype html>
         <div class="section-head"><div><p class="eyebrow">BUYER POLICY</p><h2>采购设置</h2><p class="hint">账号请在“账号管理”维护；这里仅配置采购策略。</p></div></div>
         <form id="cfg-form" class="settings-grid">
           <fieldset><legend>稀有度限价</legend><p class="hint">0 表示不采购该稀有度。</p>
-            <div class="field-grid"><label>SR 上限<input name="sr" type="number" min="0" class="num"></label><label>R 上限<input name="r" type="number" min="0" class="num"></label><label>N 上限<input name="n" type="number" min="0" class="num"></label><label>SSR 上限<input name="ssr" type="number" min="0" class="num"></label><label>UR 上限<input name="ur" type="number" min="0" class="num"></label></div>
+            <div class="field-grid"><label>SR 上限<input name="sr" type="number" min="0" class="num"></label><label>R 上限<input name="r" type="number" min="0" class="num"></label><label>N 上限<input name="n" type="number" min="0" class="num"></label><label>UR 上限<input name="ur" type="number" min="0" class="num"></label></div>
           </fieldset>
-          <fieldset><legend>预算与节奏</legend><p class="hint">限制单轮采购规模和市场请求频率。</p>
-            <div class="field-grid"><label>总花费上限<input name="max_spend" type="number" min="0" class="num"></label><label>扫描间隔（秒）<input name="scan_sec" type="number" min="30" class="num"></label><label>单条最多购买<input name="max_buy_once" type="number" min="1" class="num"></label><label>每轮最多成交条数<input name="max_listings" type="number" min="1" class="num"></label></div>
+          <fieldset><legend>余额与节奏</legend><p class="hint">不限制总采购额度和每轮数量，只保留账号余额保护线。</p>
+            <div class="field-grid"><label>余额保护线<input name="min_balance" type="number" min="0" class="num"></label><label>扫描间隔（秒）<input name="scan_sec" type="number" min="30" class="num"></label></div>
           </fieldset>
           <div class="settings-actions"><button type="submit" class="primary">保存采购设置</button><span id="save-msg"></span></div>
         </form>
+      </section>
+
+      <section id="tab-ssr" class="tab">
+        <div class="section-head"><div><p class="eyebrow">TARGETED COLLECTION</p><h2>SSR 定向收集</h2><p class="hint">从 linux.sb 称号目录读取全部 SSR；逐个填写最高收购价，留空表示不收购。</p></div><button id="btn-load-catalog" class="primary">刷新 SSR 目录</button></div>
+        <div class="panel"><div id="ssr-catalog" class="ssr-grid"><p class="empty">点击“刷新 SSR 目录”获取称号列表。</p></div><div class="settings-actions"><button id="btn-save-ssr" class="primary">保存 SSR 价格</button><span id="ssr-save-msg"></span></div></div>
       </section>
     </main>
     <footer>Gacha Buyer · 独立工具 · SQLite 本地持久化</footer>

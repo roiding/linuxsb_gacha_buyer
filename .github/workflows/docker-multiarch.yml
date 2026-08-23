@@ -2,8 +2,7 @@ name: Build & Publish multi-arch image
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    tags: ['v*']
 
 env:
   REGISTRY: ghcr.io
@@ -59,7 +58,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository }}:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # 关闭 provenance/attestation：老版本 Docker（VPS 上常见 20.10 之前）拉多架构镜像会报 no matching manifest

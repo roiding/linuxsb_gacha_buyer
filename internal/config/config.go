@@ -1,6 +1,8 @@
 // Package config 配置模型与默认值。全部持久化由 internal/db 的 settings 表承担。
 package config
 
+import "strings"
+
 // PriceRules 按稀有度的单卡限价（积分），0 表示该稀有度不收购。
 type PriceRules struct {
 	SR  int `json:"sr"`
@@ -33,12 +35,11 @@ type Config struct {
 	Username string `json:"username"` // 主号
 	Password string `json:"password"`
 
-	Rules       PriceRules `json:"rules"`
-	MaxSpend    int        `json:"max_spend"`
-	DryRun      bool       `json:"dry_run"`
-	ScanSec     int        `json:"scan_sec"`
-	MaxBuyOnce  int        `json:"max_buy_once"`
-	MaxListings int        `json:"max_listings"`
+	Rules      PriceRules     `json:"rules"`
+	SSRPrices  map[string]int `json:"ssr_prices,omitempty"`
+	MinBalance int            `json:"min_balance"`
+	DryRun     bool           `json:"dry_run"`
+	ScanSec    int            `json:"scan_sec"`
 
 	Subs      []SubAccount `json:"subs"`
 	Collector Collector    `json:"collector"`
@@ -49,15 +50,14 @@ type Config struct {
 // Defaults 返回默认配置。
 func Defaults() Config {
 	return Config{
-		Site:        "https://linux.sb",
-		Rules:       PriceRules{SR: 30, R: 10, N: 4},
-		MaxSpend:    500,
-		DryRun:      true,
-		ScanSec:     60,
-		MaxBuyOnce:  5,
-		MaxListings: 3,
-		Collector:   Collector{Keep: 5, AtHour: 9, MinTip: 1},
-		Listen:      "127.0.0.1:8080",
+		Site:       "https://linux.sb",
+		Rules:      PriceRules{SR: 30, R: 10, N: 4},
+		SSRPrices:  map[string]int{},
+		MinBalance: 0,
+		DryRun:     true,
+		ScanSec:    60,
+		Collector:  Collector{Keep: 5, AtHour: 9, MinTip: 1},
+		Listen:     "127.0.0.1:8080",
 	}
 }
 
@@ -72,11 +72,16 @@ func (c *Config) Normalize() {
 	if c.ScanSec < 30 {
 		c.ScanSec = 30
 	}
-	if c.MaxBuyOnce < 1 {
-		c.MaxBuyOnce = 1
+	if c.MinBalance < 0 {
+		c.MinBalance = 0
 	}
-	if c.MaxListings < 1 {
-		c.MaxListings = 1
+	if c.SSRPrices == nil {
+		c.SSRPrices = map[string]int{}
+	}
+	for name, price := range c.SSRPrices {
+		if strings.TrimSpace(name) == "" || price <= 0 {
+			delete(c.SSRPrices, name)
+		}
 	}
 	if c.Collector.Keep < 0 {
 		c.Collector.Keep = 0

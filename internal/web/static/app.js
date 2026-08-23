@@ -49,27 +49,26 @@ async function refreshStatus() {
     pill.textContent = s.running ? "运行中" + (s.dry_run ? "（dry-run）" : "") : "已停止";
     pill.className = "pill " + (s.running ? "on" : "off");
     $("#points").textContent = s.points > 0 ? s.points.toLocaleString() : "-";
-    $("#budget-used").textContent = s.budget_used;
-    $("#budget-max").textContent = s.max_spend;
+    $("#min-balance").textContent = s.min_balance;
     $("#listing-count").textContent = (s.listings || []).length;
     $("#buy-ok").textContent = s.buy_ok;
     $("#last-scan").textContent = s.last_scan_at || "-";
     const rules = s.rules || {};
     $("#rules-brief").textContent =
       `SR≤${rules.sr ?? 0} / R≤${rules.r ?? 0} / N≤${rules.n ?? 0}` +
-      `（SSR≤${rules.ssr ?? 0}/UR≤${rules.ur ?? 0}），总上限 ${s.max_spend} 分` +
+      `（SSR 按名称定向，UR≤${rules.ur ?? 0}），余额保护线 ${s.min_balance} 分` +
       (s.dry_run ? "，当前 dry-run" : "");
     const errBox = $("#err-box");
     if (s.last_error) { errBox.hidden = false; errBox.textContent = "最近错误：" + s.last_error; }
     else errBox.hidden = true;
 
-    renderMarket(s.listings || [], s.rules || {}, s.max_spend);
+    renderMarket(s.listings || [], s.rules || {}, s.ssr_prices || {});
     // 设置页 dry-run 开关同步
     $("#dry-run-toggle").checked = !!s.dry_run;
   } catch (e) { console.error(e); }
 }
 
-function renderMarket(listings, rules, maxSpend) {
+function renderMarket(listings, rules, ssrPrices) {
   const tb = $("#market-table tbody");
   tb.innerHTML = "";
   if (!listings.length) {
@@ -77,7 +76,7 @@ function renderMarket(listings, rules, maxSpend) {
     return;
   }
   for (const l of listings) {
-    const limit = rules[l.rarity] ?? 0;
+    const limit = l.rarity === "ssr" ? (ssrPrices[l.name] ?? 0) : (rules[l.rarity] ?? 0);
     const hit = limit > 0 && l.price <= limit && l.remain > 0;
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${l.emoji || ""} ${esc(l.name)}</td>
@@ -146,11 +145,9 @@ async function loadConfig() {
     const c = await api("/api/config");
     const f = $("#cfg-form");
     f.sr.value = c.rules.sr; f.r.value = c.rules.r; f.n.value = c.rules.n;
-    f.ssr.value = c.rules.ssr; f.ur.value = c.rules.ur;
-    f.max_spend.value = c.max_spend;
+    f.ur.value = c.rules.ur;
+    f.min_balance.value = c.min_balance;
     f.scan_sec.value = c.scan_sec;
-    f.max_buy_once.value = c.max_buy_once;
-    f.max_listings.value = c.max_listings;
   } catch (e) { console.error(e); }
 }
 
@@ -158,11 +155,9 @@ $("#cfg-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const f = ev.target;
   const body = {
-    rules: { sr: +f.sr.value, r: +f.r.value, n: +f.n.value, ssr: +f.ssr.value, ur: +f.ur.value },
-    max_spend: +f.max_spend.value,
+    rules: { sr: +f.sr.value, r: +f.r.value, n: +f.n.value, ur: +f.ur.value },
+    min_balance: +f.min_balance.value,
     scan_sec: +f.scan_sec.value,
-    max_buy_once: +f.max_buy_once.value,
-    max_listings: +f.max_listings.value,
   };
   try {
     await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -170,6 +165,50 @@ $("#cfg-form").addEventListener("submit", async (ev) => {
     setTimeout(() => $("#save-msg").textContent = "", 2500);
     refreshStatus();
   } catch (e) { alert(e.message); }
+});
+
+// ---- SSR 定向收集 ----
+let ssrTitles = [];
+async function loadCatalog() {
+  const box = $("#ssr-catalog");
+  box.innerHTML = `<p class="hint">正在读取 linux.sb 称号目录…</p>`;
+  try {
+    const d = await api("/api/catalog");
+    ssrTitles = d.titles || [];
+    const prices = d.prices || {};
+    box.innerHTML = "";
+    if (!ssrTitles.length) {
+      box.innerHTML = `<p class="empty">目录中没有发现 SSR。</p>`;
+      return;
+    }
+    for (const t of ssrTitles) {
+      const label = document.createElement("label");
+      label.className = "ssr-card";
+      label.innerHTML = `<span class="ssr-title"><b>${esc(t.emoji || "")}</b> ${esc(t.name)}</span><span class="ssr-rarity">SSR</span><input class="num" type="number" min="1" data-ssr-name="${esc(t.name)}" value="${prices[t.name] || ""}" placeholder="不收购">`;
+      box.appendChild(label);
+    }
+  } catch (e) {
+    box.innerHTML = `<p class="fail">${esc(e.message)}</p>`;
+  }
+}
+
+$("#btn-load-catalog").addEventListener("click", async (ev) => {
+  try { await withBusy(ev.currentTarget, loadCatalog); }
+  catch (e) { notify(e.message, true); }
+});
+$("#btn-save-ssr").addEventListener("click", async (ev) => {
+  const prices = {};
+  $("#ssr-catalog").querySelectorAll("[data-ssr-name]").forEach(input => {
+    const n = Number(input.value);
+    if (n > 0) prices[input.dataset.ssrName] = n;
+  });
+  try {
+    await withBusy(ev.currentTarget, () => api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ssr_prices: prices }) }));
+    $("#ssr-save-msg").textContent = "已保存 ✓";
+    notify("SSR 定向价格已保存");
+    refreshStatus();
+    setTimeout(() => $("#ssr-save-msg").textContent = "", 2500);
+  } catch (e) { notify(e.message, true); }
 });
 
 // ---- 账号管理 ----

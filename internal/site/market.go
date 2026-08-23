@@ -13,6 +13,22 @@ import (
 	"gacha-buyer/internal/market"
 )
 
+// FetchTitleCatalog 抓取登录态下的全部称号目录。
+func (c *Client) FetchTitleCatalog() ([]market.Title, error) {
+	status, body, err := c.get("/gacha")
+	if err != nil {
+		return nil, fmt.Errorf("访问称号目录失败: %w", err)
+	}
+	if status >= 300 && status < 400 {
+		return nil, errors.New("会话已失效（称号目录发生重定向），需要重新登录")
+	}
+	page := string(body)
+	if strings.Contains(page, "name=\"password\"") && strings.Contains(page, "/login") {
+		return nil, errors.New("会话已失效，需要重新登录")
+	}
+	return market.ParseTitleCatalog(page)
+}
+
 // FetchMarket 抓取并解析在售列表；未登录（跳 /login）时返回明确错误。
 func (c *Client) FetchMarket() ([]market.Listing, error) {
 	status, body, err := c.get("/gacha_market")

@@ -21,6 +21,13 @@ const (
 	UR  Rarity = "ur"
 )
 
+// Title 目录中的称号。
+type Title struct {
+	Name   string `json:"name"`
+	Emoji  string `json:"emoji"`
+	Rarity Rarity `json:"rarity"`
+}
+
 // Listing 市场在售条目。
 type Listing struct {
 	ListingID int    `json:"listing_id"` // listing_id
@@ -220,6 +227,46 @@ func text(n *html.Node) string {
 	}
 	walk(n)
 	return sb.String()
+}
+
+// ParseTitleCatalog 从 /gacha 页面提取全部称号目录。
+func ParseTitleCatalog(page string) ([]Title, error) {
+	doc, err := html.Parse(strings.NewReader(page))
+	if err != nil {
+		return nil, fmt.Errorf("解析称号目录失败: %w", err)
+	}
+	var out []Title
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "div" && strings.Contains(attr(n, "class"), "gacha-all-item") {
+			if badge := findByClass(n, "span", "gacha-title-badge"); badge != nil {
+				nameEl := findByClass(badge, "span", "gacha-title-name")
+				if nameEl != nil {
+					t := Title{Name: strings.TrimSpace(text(nameEl)), Rarity: rarityFromClass(attr(badge, "class"))}
+					if iconEl := findByClass(badge, "span", "gacha-title-icon"); iconEl != nil {
+						t.Emoji = strings.TrimSpace(text(iconEl))
+					}
+					if t.Rarity == "" {
+						if rEl := findByClass(badge, "span", "gacha-title-rarity"); rEl != nil {
+							t.Rarity = Rarity(strings.ToLower(strings.TrimSpace(text(rEl))))
+						}
+					}
+					if t.Name != "" && t.Rarity != "" {
+						out = append(out, t)
+					}
+				}
+			}
+			return
+		}
+		for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
+			walk(ch)
+		}
+	}
+	walk(doc)
+	if len(out) == 0 && !strings.Contains(page, "gacha-all-item") {
+		return nil, fmt.Errorf("页面中未发现称号目录（可能未登录或被拦截）")
+	}
+	return out, nil
 }
 
 // strongTexts 取节点内所有 <strong> 的文本（meta 区顺序：单价、剩余）。
