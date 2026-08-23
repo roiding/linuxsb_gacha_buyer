@@ -1,0 +1,8 @@
+.git
+bin
+data
+config/data
+*.db
+*.db-shm
+*.db-wal
+*.log
