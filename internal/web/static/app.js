@@ -51,7 +51,7 @@ async function refreshStatus() {
     $("#points").textContent = s.points > 0 ? s.points.toLocaleString() : "-";
     $("#budget-used").textContent = s.budget_used;
     $("#budget-max").textContent = s.max_spend;
-    $("#scan-count").textContent = s.scan_count;
+    $("#listing-count").textContent = (s.listings || []).length;
     $("#buy-ok").textContent = s.buy_ok;
     $("#last-scan").textContent = s.last_scan_at || "-";
     const rules = s.rules || {};

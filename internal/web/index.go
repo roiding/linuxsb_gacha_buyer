@@ -44,7 +44,7 @@ const indexHTML = `<!doctype html>
         <div class="metrics">
           <article class="metric"><span>当前积分</span><b id="points">—</b><small>主账号可用余额</small></article>
           <article class="metric"><span>预算使用</span><b id="budget-used">—</b><small>上限 <i id="budget-max">—</i> 积分</small></article>
-          <article class="metric"><span>扫描次数</span><b id="scan-count">—</b><small>本次运行累计</small></article>
+          <article class="metric"><span>在售条数</span><b id="listing-count">—</b><small>最近一次快照</small></article>
           <article class="metric"><span>成交笔数</span><b id="buy-ok">—</b><small>真实采购成功</small></article>
           <article class="metric"><span>最近扫描</span><b id="last-scan" class="metric-time">—</b><small>成功抓取市场时间</small></article>
         </div>

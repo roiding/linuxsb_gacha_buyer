@@ -38,12 +38,17 @@ type Engine struct {
 	client *site.Client
 }
 
-// New 创建引擎。
+// New 创建引擎；恢复上次持久化的市场快照（重启后在售快照仍可见）。
 func New(cfg *config.Config, st *store.Store, logf func(string, ...any)) *Engine {
 	if logf == nil {
 		logf = log.Printf
 	}
-	return &Engine{cfg: cfg, st: st, logf: logf}
+	e := &Engine{cfg: cfg, st: st, logf: logf}
+	if snap := st.LoadMarketSnapshot(); snap != nil && len(snap.Listings) > 0 {
+		e.listings = snap.Listings
+		e.lastScanAt = snap.At
+	}
+	return e
 }
 
 // Running 是否在运行。
@@ -204,6 +209,7 @@ func (e *Engine) scanOnce() {
 	e.lastScanAt = time.Now()
 	e.scanCount++
 	e.mu.Unlock()
+	e.st.SaveMarketSnapshot(listings, e.lastScanAt)
 
 	// 刷新积分与登录态展示
 	if pts, perr := client.FetchPoints(); perr == nil {
