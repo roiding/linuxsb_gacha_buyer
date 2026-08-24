@@ -377,7 +377,7 @@ async function refreshTransfers() {
     tb.innerHTML = "";
     for (const t of d.transfers || []) {
       const cls = t.pending ? "dry" : (t.confirmed ? "hit" : (t.submitted ? "dry" : (t.ok ? "hit" : "fail")));
-      const label = t.dry_run ? "[dry] 仅记录" : (t.pending ? "⏳ 已提交，待核验" : (!t.retryable && !t.ok ? "⚠ 硬条件未满足，本日不重试" : (t.confirmed ? "✓ 已确认" : (t.submitted ? "↗ 已提交，未确认" : (t.ok ? "— 无需归集" : "✗ 未成功"))));
+      const label = t.dry_run ? "[dry] 仅记录" : (t.pending ? "⏳ 已提交，待核验" : (!t.retryable && !t.ok ? "⚠ 硬条件未满足，本日不重试" : (t.confirmed ? "✓ 已确认" : (t.submitted ? "↗ 已提交，未确认" : (t.ok ? "— 无需归集" : "✗ 未成功")))));
       const verify = t.balance_before || t.balance_after ? ` · 余额 ${t.balance_before || "-"}→${t.balance_after || "-"}` : "";
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${(t.time || "").replace("T", " ").slice(0, 19)}</td>

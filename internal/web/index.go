@@ -137,6 +137,7 @@ const indexHTML = `<!doctype html>
       <section id="tab-ssr" class="tab">
         <div class="section-head"><div><p class="eyebrow">TARGETED COLLECTION</p><h2>SSR 定向收集</h2><p class="hint">从 linux.sb 称号目录读取全部 SSR；逐个填写最高收购价，留空表示不收购。</p></div><button id="btn-load-catalog" class="primary">刷新 SSR 目录</button></div>
         <div class="panel"><div id="ssr-catalog" class="ssr-grid"><p class="empty">点击“刷新 SSR 目录”获取称号列表。</p></div><div class="settings-actions"><button id="btn-save-ssr" class="primary">保存 SSR 价格</button><span id="ssr-save-msg"></span></div></div>
+      </section>
       <section id="tab-lottery" class="tab">
         <div class="section-head"><div><p class="eyebrow">LOTTERY REPLIES</p><h2>抽奖帖小号回复</h2><p class="hint">保存目标帖子和回复语料后，由全部已启用小号依次随机回复；只有点击“立即执行”才会发帖。</p></div><button id="btn-lottery-run" class="primary">立即执行全部小号</button></div>
         <div class="panel lottery-panel">
