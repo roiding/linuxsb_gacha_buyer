@@ -95,12 +95,15 @@ async function refreshRecords() {
     const tb = $("#records-table tbody");
     tb.innerHTML = "";
     for (const p of d.records || []) {
-      const cls = !p.ok ? "fail" : (p.dry_run ? "dry" : "hit");
-      const label = p.dry_run ? "[dry] 将购买" : (p.ok ? "✓ 成交" : "✗ 失败");
+      const confirmed = !!p.confirmed || (!Object.prototype.hasOwnProperty.call(p, "confirmed") && !!p.ok && !p.dry_run);
+      const submitted = !!p.submitted || confirmed || !!p.dry_run;
+      const cls = p.dry_run ? "dry" : (confirmed ? "hit" : (submitted ? "dry" : "fail"));
+      const label = p.dry_run ? "[dry] 仅模拟" : (confirmed ? "✓ 已确认成交" : (submitted ? "↗ 已提交，未确认" : "✗ 未成交"));
+      const time = p.time ? String(p.time).replace("T", " ").slice(0, 19) : "-";
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${p.time.replace("T", " ").slice(0, 19)}</td>
-        <td>${esc(p.name)}</td><td>${rarityBadge(p.rarity)}</td>
-        <td>${p.price} × ${p.qty}</td><td>${p.cost}</td>
+      tr.innerHTML = `<td>${esc(time)}</td>
+        <td>${esc(p.name || "-")}</td><td>${rarityBadge(p.rarity)}</td>
+        <td>${p.price ?? 0} × ${p.qty ?? 0}</td><td>${p.cost ?? 0}</td>
         <td class="${cls}">${label}${p.message ? " · " + esc(p.message) : ""}</td>`;
       tb.appendChild(tr);
     }

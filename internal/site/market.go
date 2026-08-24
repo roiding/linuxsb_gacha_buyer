@@ -70,16 +70,20 @@ func (c *Client) FetchPoints() (int, error) {
 	return n, nil
 }
 
-// BuyResult 单次购买结果。
+// BuyResult 单次购买结果。OK 只表示已经确认成交，不表示请求已提交。
 type BuyResult struct {
-	OK       bool
-	Message  string
-	HTTP     int
-	Redirect string
+	OK          bool
+	Submitted   bool
+	Message     string
+	HTTP        int
+	Redirect    string
+	Qty         int
+	Cost        int
+	PointsAfter int
 }
 
-// Buy 对指定 listing 下单。
-func (c *Client) Buy(l market.Listing, quantity int) BuyResult {
+// Buy 对指定 listing 下单，并通过积分变化确认实际成交数量。
+func (c *Client) Buy(l market.Listing, quantity, pointsBefore int) BuyResult {
 	form := url.Values{}
 	form.Set("_csrf", l.CSRF)
 	form.Set("listing_id", strconv.Itoa(l.ListingID))
@@ -98,27 +102,77 @@ func (c *Client) Buy(l market.Listing, quantity int) BuyResult {
 		return BuyResult{Message: "请求失败: " + err.Error()}
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return BuyResult{HTTP: resp.StatusCode, Message: "读取购买响应失败: " + readErr.Error()}
+	}
 	page := string(body)
+	res := BuyResult{
+		HTTP:        resp.StatusCode,
+		Redirect:    resp.Request.URL.String(),
+		Submitted:   resp.StatusCode >= 200 && resp.StatusCode < 400,
+		Qty:         quantity,
+		Cost:        quantity * l.Price,
+		PointsAfter: pointsBefore,
+	}
+	if strings.Contains(page, "name=\"password\"") && strings.Contains(page, "/login") {
+		res.Submitted = false
+		res.Message = "购买请求后会话已失效"
+		return res
+	}
+	responseMessage := extractAlert(page)
+	if resp.StatusCode >= 400 {
+		res.Submitted = false
+		res.Message = shortText(page, resp.StatusCode)
+		return res
+	}
+	if isPurchaseFailure(responseMessage) {
+		res.Submitted = false
+		res.Message = responseMessage
+		return res
+	}
 
-	res := BuyResult{HTTP: resp.StatusCode, Redirect: resp.Header.Get("Location")}
-	switch {
-	case resp.StatusCode >= 300 && resp.StatusCode < 400:
-		// PRG 模式：重定向即提交成功（具体成败看后续页面，由调用方刷新确认）
-		res.OK = true
-		res.Message = "购买请求已提交"
-	case resp.StatusCode == http.StatusOK && strings.Contains(page, "gacha-market-card"):
-		// 直接渲染市场页：无错误提示视为成功
-		if msg := extractAlert(page); msg != "" {
-			res.Message = msg
+	pointsAfter, err := c.FetchPoints()
+	if err != nil {
+		res.Message = "购买请求已提交，但无法确认余额变化: " + err.Error()
+		if responseMessage != "" {
+			res.Message += "；站点返回: " + responseMessage
+		}
+		return res
+	}
+	res.PointsAfter = pointsAfter
+	delta := pointsBefore - pointsAfter
+	if delta > 0 && l.Price > 0 && delta%l.Price == 0 {
+		actualQty := delta / l.Price
+		if actualQty <= quantity {
+			res.OK = true
+			res.Qty = actualQty
+			res.Cost = delta
+			res.Message = fmt.Sprintf("成交已确认：余额 %d → %d", pointsBefore, pointsAfter)
+			if actualQty != quantity {
+				res.Message += fmt.Sprintf("，实际成交 %d/%d 个", actualQty, quantity)
+			}
 			return res
 		}
-		res.OK = true
-		res.Message = "购买请求已提交"
-	default:
-		res.Message = shortText(page, resp.StatusCode)
+	}
+	if responseMessage != "" {
+		res.Message = responseMessage + fmt.Sprintf("；余额未出现对应扣款（%d → %d），未计入成交", pointsBefore, pointsAfter)
+	} else {
+		res.Message = fmt.Sprintf("购买请求已提交，但余额未出现对应扣款（%d → %d），未确认成交", pointsBefore, pointsAfter)
 	}
 	return res
+}
+
+func isPurchaseFailure(message string) bool {
+	if message == "" {
+		return false
+	}
+	for _, word := range []string{"失败", "错误", "无效", "不足", "售罄", "不能", "无法", "不存在", "拒绝", "已被购买", "未登录"} {
+		if strings.Contains(message, word) {
+			return true
+		}
+	}
+	return false
 }
 
 // shortText 提取错误页可读信息。

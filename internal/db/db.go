@@ -51,18 +51,21 @@ func migrate(d *sql.DB) error {
 			UNIQUE(role, username)
 		)`,
 		`CREATE TABLE IF NOT EXISTS purchases (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			time       TEXT NOT NULL,
-			listing_id INTEGER NOT NULL,
-			name       TEXT NOT NULL,
-			rarity     TEXT NOT NULL,
-			price      INTEGER NOT NULL,
-			qty        INTEGER NOT NULL,
-			cost       INTEGER NOT NULL,
-			dry_run    INTEGER NOT NULL DEFAULT 0,
-			ok         INTEGER NOT NULL DEFAULT 0,
-			message    TEXT NOT NULL DEFAULT ''
-		)`,
+				id         INTEGER PRIMARY KEY AUTOINCREMENT,
+				time       TEXT NOT NULL,
+				listing_id INTEGER NOT NULL,
+				name       TEXT NOT NULL,
+				rarity     TEXT NOT NULL,
+				price      INTEGER NOT NULL,
+				qty        INTEGER NOT NULL,
+				cost       INTEGER NOT NULL,
+				dry_run    INTEGER NOT NULL DEFAULT 0,
+				ok         INTEGER NOT NULL DEFAULT 0,
+				submitted  INTEGER NOT NULL DEFAULT 0,
+				confirmed  INTEGER NOT NULL DEFAULT 0,
+				message    TEXT NOT NULL DEFAULT ''
+			)`,
+
 		`CREATE TABLE IF NOT EXISTS transfers (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			time       TEXT NOT NULL,
@@ -79,6 +82,20 @@ func migrate(d *sql.DB) error {
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {
 			return fmt.Errorf("迁移失败: %w", err)
+		}
+	}
+	if ok, err := hasColumn(d, "purchases", "submitted"); err != nil {
+		return err
+	} else if !ok {
+		if _, err := d.Exec(`ALTER TABLE purchases ADD COLUMN submitted INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("迁移 purchases.submitted 失败: %w", err)
+		}
+	}
+	if ok, err := hasColumn(d, "purchases", "confirmed"); err != nil {
+		return err
+	} else if !ok {
+		if _, err := d.Exec(`ALTER TABLE purchases ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("迁移 purchases.confirmed 失败: %w", err)
 		}
 	}
 	if ok, err := hasColumn(d, "transfers", "account_id"); err != nil {

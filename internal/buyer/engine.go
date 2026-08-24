@@ -276,12 +276,14 @@ func (e *Engine) buyOne(client *site.Client, l market.Listing) {
 	e.mu.Lock()
 	minBalance, dryRun := e.cfg.MinBalance, e.cfg.DryRun
 	e.mu.Unlock()
+	pointsBefore := 0
 	if !dryRun {
 		points, err := client.FetchPoints()
 		if err != nil {
 			e.logf("获取余额失败，跳过 %s%s：%v", l.Emoji, l.Name, err)
 			return
 		}
+		pointsBefore = points
 		e.mu.Lock()
 		e.points = points
 		e.mu.Unlock()
@@ -295,20 +297,26 @@ func (e *Engine) buyOne(client *site.Client, l market.Listing) {
 	if dryRun {
 		e.logf("[DRY] 将购买 %s%s ×%d @%d = %d 分", l.Emoji, l.Name, qty, l.Price, cost)
 	} else {
-		res = client.Buy(l, qty)
-		e.logf("购买 %s%s ×%d @%d → ok=%v %s", l.Emoji, l.Name, qty, l.Price, res.OK, res.Message)
+		res = client.Buy(l, qty, pointsBefore)
+		e.logf("购买 %s%s ×%d @%d → ok=%v submitted=%v %s", l.Emoji, l.Name, qty, l.Price, res.OK, res.Submitted, res.Message)
 	}
 
+	actualQty, actualCost := qty, cost
+	if !dryRun && res.OK {
+		actualQty, actualCost = res.Qty, res.Cost
+	}
 	rec := store.Purchase{
 		Time:      time.Now(),
 		ListingID: l.ListingID,
 		Name:      l.Name,
 		Rarity:    string(l.Rarity),
 		Price:     l.Price,
-		Qty:       qty,
-		Cost:      cost,
+		Qty:       actualQty,
+		Cost:      actualCost,
 		DryRun:    dryRun,
 		OK:        res.OK || dryRun,
+		Submitted: dryRun || res.Submitted,
+		Confirmed: dryRun || res.OK,
 		Message:   res.Message,
 	}
 	if err := e.st.Add(rec); err != nil {

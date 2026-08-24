@@ -4,28 +4,30 @@ import "time"
 
 // PurchaseRow purchases 表存储模型。
 type PurchaseRow struct {
-	Time      time.Time
-	ListingID int
-	Name      string
-	Rarity    string
-	Price     int
-	Qty       int
-	Cost      int
-	DryRun    bool
-	OK        bool
-	Message   string
+	Time      time.Time `json:"time"`
+	ListingID int       `json:"listing_id"`
+	Name      string    `json:"name"`
+	Rarity    string    `json:"rarity"`
+	Price     int       `json:"price"`
+	Qty       int       `json:"qty"`
+	Cost      int       `json:"cost"`
+	DryRun    bool      `json:"dry_run"`
+	OK        bool      `json:"ok"`
+	Submitted bool      `json:"submitted"`
+	Confirmed bool      `json:"confirmed"`
+	Message   string    `json:"message"`
 }
 
 // AddPurchase 插入购买记录。
 func (d *DB) AddPurchase(p *PurchaseRow) error {
-	_, err := d.Exec(`INSERT INTO purchases(time, listing_id, name, rarity, price, qty, cost, dry_run, ok, message)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+	_, err := d.Exec(`INSERT INTO purchases(time, listing_id, name, rarity, price, qty, cost, dry_run, ok, submitted, confirmed, message)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.Time.UTC().Format(time.RFC3339), p.ListingID, p.Name, p.Rarity,
-		p.Price, p.Qty, p.Cost, b2i(p.DryRun), b2i(p.OK), p.Message)
+		p.Price, p.Qty, p.Cost, b2i(p.DryRun), b2i(p.OK), b2i(p.Submitted), b2i(p.Confirmed), p.Message)
 	return err
 }
 
-const purchaseCols = `time, listing_id, name, rarity, price, qty, cost, dry_run, ok, message`
+const purchaseCols = `time, listing_id, name, rarity, price, qty, cost, dry_run, ok, submitted, confirmed, message`
 
 // ListPurchases 新→旧分页。
 func (d *DB) ListPurchases(limit int) ([]*PurchaseRow, error) {
@@ -38,12 +40,13 @@ func (d *DB) ListPurchases(limit int) ([]*PurchaseRow, error) {
 	for rows.Next() {
 		p := &PurchaseRow{}
 		var ts string
-		var dry, ok int
-		if err := rows.Scan(&ts, &p.ListingID, &p.Name, &p.Rarity, &p.Price, &p.Qty, &p.Cost, &dry, &ok, &p.Message); err != nil {
+		var dry, ok, submitted, confirmed int
+		if err := rows.Scan(&ts, &p.ListingID, &p.Name, &p.Rarity, &p.Price, &p.Qty, &p.Cost, &dry, &ok, &submitted, &confirmed, &p.Message); err != nil {
 			return nil, err
 		}
 		p.Time, _ = time.Parse(time.RFC3339, ts)
 		p.DryRun, p.OK = dry != 0, ok != 0
+		p.Submitted, p.Confirmed = submitted != 0, confirmed != 0
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -58,7 +61,7 @@ type PurchaseStats struct {
 // GetPurchaseStats 统计真实成交。
 func (d *DB) GetPurchaseStats() (*PurchaseStats, error) {
 	s := &PurchaseStats{}
-	err := d.QueryRow(`SELECT COALESCE(SUM(cost),0), COUNT(*) FROM purchases WHERE ok=1 AND dry_run=0`).
+	err := d.QueryRow(`SELECT COALESCE(SUM(cost),0), COUNT(*) FROM purchases WHERE confirmed=1 AND dry_run=0`).
 		Scan(&s.TotalSpent, &s.OKCount)
 	return s, err
 }
