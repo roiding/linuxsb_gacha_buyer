@@ -14,10 +14,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
 			"accounts": s.mgr.Snapshot(),
 			"collector": map[string]any{
-				"topic_id": s.cfg.Collector.TopicID,
-				"keep":     s.cfg.Collector.Keep,
-				"at_hour":  s.cfg.Collector.AtHour,
-				"message":  s.cfg.Collector.Message,
+				"topic_id":          s.cfg.Collector.TopicID,
+				"keep":              s.cfg.Collector.Keep,
+				"at_hour":           s.cfg.Collector.AtHour,
+				"random_window_min": s.cfg.Collector.RandomWindowMin,
+				"message":           s.cfg.Collector.Message,
 			},
 		})
 
@@ -29,10 +30,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			ID           int                `json:"id,omitempty"`
 			Sub          *config.SubAccount `json:"sub,omitempty"`
 			Collector    *struct {
-				TopicID int    `json:"topic_id"`
-				Keep    int    `json:"keep"`
-				AtHour  int    `json:"at_hour"`
-				Message string `json:"message"`
+				TopicID         int    `json:"topic_id"`
+				Keep            int    `json:"keep"`
+				AtHour          int    `json:"at_hour"`
+				RandomWindowMin int    `json:"random_window_min"`
+				Message         string `json:"message"`
 			} `json:"collector,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -64,7 +66,9 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			s.cfg.Collector.TopicID = in.Collector.TopicID
 			s.cfg.Collector.Keep = in.Collector.Keep
 			s.cfg.Collector.AtHour = in.Collector.AtHour
+			s.cfg.Collector.RandomWindowMin = in.Collector.RandomWindowMin
 			s.cfg.Collector.Message = in.Collector.Message
+
 		}
 
 		switch in.Action {
@@ -106,6 +110,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			httpError(w, 500, "保存失败: "+err.Error())
 			return
 		}
+		if in.Collector != nil {
+			s.col.Reschedule()
+		}
+
 		s.mgr.Resync()
 		writeJSON(w, map[string]any{"ok": true})
 	default:
@@ -186,6 +194,9 @@ func (s *Server) handleCollectorRun(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 405, "方法不允许")
 		return
 	}
-	go func() { s.col.RunOnce(true) }()
+	if !s.col.StartOnce() {
+		httpError(w, http.StatusConflict, "归集任务已在运行")
+		return
+	}
 	writeJSON(w, map[string]any{"ok": true, "message": "归集已开始，请稍后刷新记录"})
 }

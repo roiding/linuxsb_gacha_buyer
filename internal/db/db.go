@@ -67,16 +67,47 @@ func migrate(d *sql.DB) error {
 			)`,
 
 		`CREATE TABLE IF NOT EXISTS transfers (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			time       TEXT NOT NULL,
-			sub        TEXT NOT NULL,
-			check_in   INTEGER NOT NULL DEFAULT 0,
-			balance    INTEGER NOT NULL DEFAULT 0,
-			tip_amount INTEGER NOT NULL DEFAULT 0,
-			topic_id   INTEGER NOT NULL DEFAULT 0,
-			dry_run    INTEGER NOT NULL DEFAULT 0,
-			ok         INTEGER NOT NULL DEFAULT 0,
-			message    TEXT NOT NULL DEFAULT ''
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				time          TEXT NOT NULL,
+				sub           TEXT NOT NULL,
+				account_id    INTEGER NOT NULL DEFAULT 0,
+				check_in      INTEGER NOT NULL DEFAULT 0,
+				balance       INTEGER NOT NULL DEFAULT 0,
+				balance_before INTEGER NOT NULL DEFAULT 0,
+				balance_after  INTEGER NOT NULL DEFAULT 0,
+				tip_amount    INTEGER NOT NULL DEFAULT 0,
+				topic_id      INTEGER NOT NULL DEFAULT 0,
+				dry_run       INTEGER NOT NULL DEFAULT 0,
+				ok            INTEGER NOT NULL DEFAULT 0,
+				submitted     INTEGER NOT NULL DEFAULT 0,
+				confirmed     INTEGER NOT NULL DEFAULT 0,
+					pending        INTEGER NOT NULL DEFAULT 0,
+					retryable      INTEGER NOT NULL DEFAULT 1,
+					http_status    INTEGER NOT NULL DEFAULT 0,
+
+				attempt       INTEGER NOT NULL DEFAULT 0,
+				message       TEXT NOT NULL DEFAULT ''
+			)`,
+		`CREATE TABLE IF NOT EXISTS collector_schedule (
+				day          TEXT PRIMARY KEY,
+				planned_at   TEXT NOT NULL,
+				started_at   TEXT NOT NULL DEFAULT '',
+				completed_at TEXT NOT NULL DEFAULT '',
+				status       TEXT NOT NULL DEFAULT 'planned'
+			)`,
+		`CREATE TABLE IF NOT EXISTS lottery_replies (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			time        TEXT NOT NULL,
+			account_id  INTEGER NOT NULL DEFAULT 0,
+			sub         TEXT NOT NULL,
+			topic_id    INTEGER NOT NULL,
+			content     TEXT NOT NULL,
+			captcha     INTEGER NOT NULL DEFAULT 0,
+			dry_run     INTEGER NOT NULL DEFAULT 0,
+			submitted   INTEGER NOT NULL DEFAULT 0,
+			confirmed   INTEGER NOT NULL DEFAULT 0,
+			reply_id    INTEGER NOT NULL DEFAULT 0,
+			message     TEXT NOT NULL DEFAULT ''
 		)`,
 	}
 	for _, s := range stmts {
@@ -105,7 +136,32 @@ func migrate(d *sql.DB) error {
 			return fmt.Errorf("迁移 transfers.account_id 失败: %w", err)
 		}
 	}
+	for _, col := range []struct {
+		name string
+		ddl  string
+	}{
+		{"balance_before", `ALTER TABLE transfers ADD COLUMN balance_before INTEGER NOT NULL DEFAULT 0`},
+		{"balance_after", `ALTER TABLE transfers ADD COLUMN balance_after INTEGER NOT NULL DEFAULT 0`},
+		{"submitted", `ALTER TABLE transfers ADD COLUMN submitted INTEGER NOT NULL DEFAULT 0`},
+		{"confirmed", `ALTER TABLE transfers ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0`},
+		{"pending", `ALTER TABLE transfers ADD COLUMN pending INTEGER NOT NULL DEFAULT 0`},
+		{"retryable", `ALTER TABLE transfers ADD COLUMN retryable INTEGER NOT NULL DEFAULT 1`},
+		{"http_status", `ALTER TABLE transfers ADD COLUMN http_status INTEGER NOT NULL DEFAULT 0`},
+
+		{"attempt", `ALTER TABLE transfers ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0`},
+	} {
+		ok, err := hasColumn(d, "transfers", col.name)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if _, err := d.Exec(col.ddl); err != nil {
+				return fmt.Errorf("迁移 transfers.%s 失败: %w", col.name, err)
+			}
+		}
+	}
 	return nil
+
 }
 
 func hasColumn(d *sql.DB, table, column string) (bool, error) {

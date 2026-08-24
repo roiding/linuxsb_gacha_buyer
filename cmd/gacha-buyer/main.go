@@ -17,6 +17,7 @@ import (
 	"gacha-buyer/internal/collector"
 	"gacha-buyer/internal/config"
 	"gacha-buyer/internal/db"
+	"gacha-buyer/internal/lottery"
 	"gacha-buyer/internal/store"
 	"gacha-buyer/internal/web"
 )
@@ -62,7 +63,8 @@ func main() {
 	eng.Mgr = mgr // 复用主号会话池
 
 	col := collector.New(&cfg, mgr, d, log.Printf)
-	srv := web.New(&cfg, d, st, eng, mgr, col)
+	lot := lottery.New(&cfg, mgr, d, log.Printf)
+	srv := web.New(&cfg, d, st, eng, mgr, col, lot)
 
 	go func() {
 		log.Printf("Web 控制台: http://%s （数据库: %s）", cfg.Listen, dbPath)
@@ -79,6 +81,7 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 	log.Println("收到退出信号，停止后台任务…")
+	lot.Stop()
 	col.Stop()
 	mgr.StopPatrol()
 	eng.Stop()

@@ -15,6 +15,7 @@ import (
 	"gacha-buyer/internal/collector"
 	"gacha-buyer/internal/config"
 	"gacha-buyer/internal/db"
+	"gacha-buyer/internal/lottery"
 	"gacha-buyer/internal/market"
 	"gacha-buyer/internal/store"
 )
@@ -30,11 +31,12 @@ type Server struct {
 	eng *buyer.Engine
 	mgr *accounts.Manager
 	col *collector.Engine
+	lot *lottery.Engine
 }
 
 // New 创建 Web 服务。
-func New(cfg *config.Config, d *db.DB, st *store.Store, eng *buyer.Engine, mgr *accounts.Manager, col *collector.Engine) *Server {
-	return &Server{cfg: cfg, d: d, st: st, eng: eng, mgr: mgr, col: col}
+func New(cfg *config.Config, d *db.DB, st *store.Store, eng *buyer.Engine, mgr *accounts.Manager, col *collector.Engine, lot *lottery.Engine) *Server {
+	return &Server{cfg: cfg, d: d, st: st, eng: eng, mgr: mgr, col: col, lot: lot}
 }
 
 // Handler 组装路由。
@@ -55,6 +57,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/accounts/patrol", s.handlePatrolOnce)
 	mux.HandleFunc("/api/transfers", s.handleTransfers)
 	mux.HandleFunc("/api/collector/run", s.handleCollectorRun)
+	mux.HandleFunc("/api/lottery", s.handleLottery)
+	mux.HandleFunc("/api/lottery/run", s.handleLotteryRun)
 	return mux
 }
 

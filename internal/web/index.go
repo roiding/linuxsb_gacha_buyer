@@ -22,6 +22,7 @@ const indexHTML = `<!doctype html>
       <button data-tab="transfers"><span>↗</span>归集记录</button>
       <button data-tab="settings"><span>⚙</span>采购设置</button>
       <button data-tab="ssr"><span>✦</span>SSR定向</button>
+      <button data-tab="lottery"><span>✎</span>抽奖回复</button>
     </nav>
     <div class="sidebar-note"><span class="status-dot"></span><div><b>本机运行</b><small>数据仅存于 SQLite</small></div></div>
   </aside>
@@ -98,11 +99,14 @@ const indexHTML = `<!doctype html>
           </details>
         </article>
         <article class="panel account-panel">
-          <div class="panel-head"><div><span class="section-kicker">DAILY TRANSFER</span><h3>每日积分归集</h3><p class="hint">固定帖子 ID 为 0 时，从主号已发布主题中随机选择。</p></div><button id="btn-collector-run">立即执行一轮</button></div>
+	          <div class="panel-head"><div><span class="section-kicker">DAILY TRANSFER</span><h3>每日积分归集</h3><p class="hint">每天在配置窗口内生成一个持久化随机时间；容器重启会继续当天尚未完成的小号。</p></div><button id="btn-collector-run">立即执行一轮</button></div>
+
           <form id="collector-form" class="inline-form">
             <label>固定帖子 ID<input name="topic_id" type="number" min="0" class="num" value="0"></label>
             <label>小号保留积分<input name="keep" type="number" min="0" class="num"></label>
-            <label>每日执行时刻<input name="at_hour" type="number" min="0" max="23" class="num"></label>
+	            <label>每日窗口起点<input name="at_hour" type="number" min="0" max="23" class="num"></label>
+	            <label>随机窗口（分钟）<input name="random_window_min" type="number" min="1" max="720" class="num"></label>
+
             <label>打赏备注<input name="tip_message" placeholder="可留空"></label>
             <button type="submit" class="primary">保存归集设置</button>
           </form>
@@ -133,6 +137,20 @@ const indexHTML = `<!doctype html>
       <section id="tab-ssr" class="tab">
         <div class="section-head"><div><p class="eyebrow">TARGETED COLLECTION</p><h2>SSR 定向收集</h2><p class="hint">从 linux.sb 称号目录读取全部 SSR；逐个填写最高收购价，留空表示不收购。</p></div><button id="btn-load-catalog" class="primary">刷新 SSR 目录</button></div>
         <div class="panel"><div id="ssr-catalog" class="ssr-grid"><p class="empty">点击“刷新 SSR 目录”获取称号列表。</p></div><div class="settings-actions"><button id="btn-save-ssr" class="primary">保存 SSR 价格</button><span id="ssr-save-msg"></span></div></div>
+      <section id="tab-lottery" class="tab">
+        <div class="section-head"><div><p class="eyebrow">LOTTERY REPLIES</p><h2>抽奖帖小号回复</h2><p class="hint">保存目标帖子和回复语料后，由全部已启用小号依次随机回复；只有点击“立即执行”才会发帖。</p></div><button id="btn-lottery-run" class="primary">立即执行全部小号</button></div>
+        <div class="panel lottery-panel">
+          <form id="lottery-form" class="lottery-form">
+            <label>抽奖帖 URL<input name="lottery_url" type="url" placeholder="https://linux.sb/topic/123" required></label>
+            <label>回复语料库 <small>每行一条，至少 5 个字；同一轮优先使用不同文案</small><textarea name="lottery_messages" rows="15" required></textarea></label>
+            <div class="settings-actions"><button type="submit" class="primary">保存抽奖回复设置</button><span id="lottery-save-msg"></span></div>
+          </form>
+          <p class="hint schedule-line" id="lottery-status">正在读取状态…</p>
+        </div>
+        <div class="section-head compact"><div><p class="eyebrow">REPLY HISTORY</p><h2>回复记录</h2><p class="hint">“已提交”不等于成功；只有站点返回有效 replyid 才标记为确认成功。</p></div></div>
+        <div class="table-card"><div class="table-wrap"><table id="lottery-table">
+          <thead><tr><th>时间</th><th>小号</th><th>帖子</th><th>语料</th><th>验证码</th><th>结果</th></tr></thead><tbody></tbody>
+        </table></div></div>
       </section>
     </main>
     <footer>Gacha Buyer · 独立工具 · SQLite 本地持久化</footer>

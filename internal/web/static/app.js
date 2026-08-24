@@ -214,7 +214,58 @@ $("#btn-save-ssr").addEventListener("click", async (ev) => {
   } catch (e) { notify(e.message, true); }
 });
 
-// ---- 账号管理 ----
+let lotteryDirty = false;
+
+async function refreshLottery() {
+  try {
+    const d = await api("/api/lottery");
+    const f = $("#lottery-form");
+    if (!lotteryDirty) {
+      f.lottery_url.value = d.url || "";
+      f.lottery_messages.value = (d.messages || []).join("\n");
+    }
+    const status = $("#lottery-status");
+    status.textContent = `${d.running ? "任务运行中" : "任务已停止"} · 已启用小号 ${d.enabled_subs || 0} 个` + (d.dry_run ? " · 当前 dry-run，只记录不发帖" : " · 真实模式会向目标帖发帖");
+    const tb = $("#lottery-table tbody");
+    tb.innerHTML = "";
+    for (const x of d.records || []) {
+      const cls = x.dry_run ? "dry" : (x.confirmed ? "hit" : (x.submitted ? "dry" : "fail"));
+      const label = x.dry_run ? "[dry] 仅记录" : (x.confirmed ? `✓ 已确认 #${x.reply_id || ""}` : (x.submitted ? "↗ 已提交，未确认" : "✗ 未提交"));
+      const time = x.time ? String(x.time).replace("T", " ").slice(0, 19) : "-";
+      tb.insertAdjacentHTML("beforeend", `<tr><td>${esc(time)}</td><td>${esc(x.sub || "-")}</td><td>#${x.topic_id || "-"}</td><td class="hint">${esc(x.content || "")}</td><td>${x.captcha ? "✓" : "-"}</td><td class="${cls}">${label} · ${esc(x.message || "")}</td></tr>`);
+    }
+  } catch (e) { console.error(e); }
+}
+
+$("#lottery-form").addEventListener("input", () => { lotteryDirty = true; });
+
+$("#lottery-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const messages = f.lottery_messages.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  try {
+    await api("/api/lottery", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: f.lottery_url.value.trim(), messages }) });
+    lotteryDirty = false;
+    $("#lottery-save-msg").textContent = "已保存 ✓";
+    notify("抽奖回复设置已保存");
+    setTimeout(() => $("#lottery-save-msg").textContent = "", 2500);
+    refreshLottery();
+  } catch (e) { notify(e.message, true); }
+});
+
+$("#btn-lottery-run").addEventListener("click", async (ev) => {
+  const f = $("#lottery-form");
+  const enabled = $("#lottery-status").textContent.match(/已启用小号 (\d+) 个/);
+  const count = enabled ? enabled[1] : "若干";
+  if (!f.lottery_url.value.trim()) { notify("请先保存抽奖帖 URL", true); return; }
+  if (!confirm(`确认让 ${count} 个已启用小号依次回复此抽奖帖？`)) return;
+  try {
+    await withBusy(ev.currentTarget, () => api("/api/lottery/run", { method: "POST" }));
+    notify("抽奖回复任务已开始");
+    refreshLottery();
+  } catch (e) { notify(e.message, true); }
+});
+
 const statusLabel = { ok: "✓ 正常", expired: "◌ 掉线", error: "✗ 异常" };
 const statusClass = { ok: "hit", expired: "dry", error: "fail" };
 function statusBadge(st) {
@@ -248,6 +299,7 @@ async function refreshAccounts() {
     f.topic_id.value = col.topic_id || 0;
     f.keep.value = col.keep ?? 5;
     f.at_hour.value = col.at_hour ?? 9;
+    f.random_window_min.value = col.random_window_min ?? 60;
     f.tip_message.value = col.message || "";
   } catch (e) { console.error(e); }
 }
@@ -309,7 +361,7 @@ $("#sub-acct-form").addEventListener("submit", async (ev) => {
 $("#collector-form").addEventListener("submit", async (ev) => {
   ev.preventDefault(); const f = ev.target;
   try {
-    await api("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ collector: { topic_id: +f.topic_id.value || 0, keep: +f.keep.value, at_hour: +f.at_hour.value, message: f.tip_message.value } }) });
+    await api("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ collector: { topic_id: +f.topic_id.value || 0, keep: +f.keep.value, at_hour: +f.at_hour.value, random_window_min: +f.random_window_min.value, message: f.tip_message.value } }) });
     alert("归集设置已保存 ✓"); refreshAccounts();
   } catch (e) { alert(e.message); }
 });
@@ -324,13 +376,15 @@ async function refreshTransfers() {
     const tb = $("#transfers-table tbody");
     tb.innerHTML = "";
     for (const t of d.transfers || []) {
-      const cls = !t.ok ? "fail" : (t.dry_run ? "dry" : "hit");
+      const cls = t.pending ? "dry" : (t.confirmed ? "hit" : (t.submitted ? "dry" : (t.ok ? "hit" : "fail")));
+      const label = t.dry_run ? "[dry] 仅记录" : (t.pending ? "⏳ 已提交，待核验" : (!t.retryable && !t.ok ? "⚠ 硬条件未满足，本日不重试" : (t.confirmed ? "✓ 已确认" : (t.submitted ? "↗ 已提交，未确认" : (t.ok ? "— 无需归集" : "✗ 未成功"))));
+      const verify = t.balance_before || t.balance_after ? ` · 余额 ${t.balance_before || "-"}→${t.balance_after || "-"}` : "";
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${(t.time || "").replace("T", " ").slice(0, 19)}</td>
         <td>${esc(t.sub)}</td><td>${t.check_in ? "✓" : "-"}</td>
         <td>${t.balance}</td><td>${t.tip_amount || "-"}</td>
         <td>${t.topic_id ? "#" + t.topic_id : "-"}</td>
-        <td class="${cls}">${t.dry_run ? "[dry] " : ""}${esc(t.message || "")}</td>`;
+        <td class="${cls}">${label}${verify} · ${esc(t.message || "")}</td>`;
       tb.appendChild(tr);
     }
   } catch (e) { console.error(e); }
@@ -348,8 +402,10 @@ refreshStatus();
 refreshRecords();
 refreshAccounts();
 refreshTransfers();
+refreshLottery();
 loadConfig();
 setInterval(refreshStatus, 8000);
 setInterval(refreshRecords, 15000);
 setInterval(refreshAccounts, 15000);
 setInterval(refreshTransfers, 15000);
+setInterval(refreshLottery, 15000);
