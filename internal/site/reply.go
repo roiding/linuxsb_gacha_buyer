@@ -19,6 +19,7 @@ import (
 type ReplyResult struct {
 	Submitted    bool
 	Confirmed    bool
+	Retryable    bool
 	Message      string
 	HTTP         int
 	ReplyID      int
@@ -36,11 +37,30 @@ type replyForm struct {
 var replyIDRE = regexp.MustCompile(`/topic/([1-9][0-9]*)\?replyid=([1-9][0-9]*)`)
 var replyCaptchaDelay = true
 
-// SetReplyCaptchaDelayForTest controls the human-delay hook for tests.
+// SetReplyCaptchaDelayForTest controls the reply submission delay in tests.
 func SetReplyCaptchaDelayForTest(enabled bool) func() {
 	old := replyCaptchaDelay
 	replyCaptchaDelay = enabled
 	return func() { replyCaptchaDelay = old }
+}
+
+func waitReplySubmitDelay() {
+	if replyCaptchaDelay {
+		time.Sleep(time.Duration(3_000+rand.Intn(3_000)) * time.Millisecond)
+	}
+}
+
+func replyFailureRetryable(status int, message string) bool {
+	if status == http.StatusTooManyRequests || status >= 500 {
+		return true
+	}
+	low := strings.ToLower(message)
+	for _, word := range []string{"提交过快", "验证码加载", "等待验证码", "请求过于频繁", "请稍后再试"} {
+		if strings.Contains(low, strings.ToLower(word)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Reply 回答指定主题。topicURL 必须是站内 /topic/<id> 链接。
@@ -73,10 +93,9 @@ func (c *Client) Reply(topicURL, message string) ReplyResult {
 				form.fields.Set("native_captcha_pow", nonce)
 			}
 		}
-		if replyCaptchaDelay {
-			time.Sleep(time.Duration(1200+rand.Intn(1800)) * time.Millisecond)
-		}
 	}
+
+	waitReplySubmitDelay()
 
 	status, body, finalURL, err := c.postReply(form.action, "/topic/"+strconv.Itoa(topicID), form.fields)
 	res := ReplyResult{HTTP: status, NeedsCaptcha: form.captchaToken != ""}
@@ -88,8 +107,10 @@ func (c *Client) Reply(topicURL, message string) ReplyResult {
 	if status >= 400 {
 		res.Submitted = false
 		res.Message = shortText(string(body), status)
+		res.Retryable = replyFailureRetryable(status, res.Message)
 		return res
 	}
+
 	page := string(body)
 	if strings.Contains(page, `name="password"`) && strings.Contains(page, "/login") {
 		res.Submitted = false
@@ -99,6 +120,7 @@ func (c *Client) Reply(topicURL, message string) ReplyResult {
 	if msg := extractAlert(page); msg != "" && isReplyFailure(msg) {
 		res.Submitted = false
 		res.Message = msg
+		res.Retryable = replyFailureRetryable(0, msg)
 		return res
 	}
 	if m := replyIDRE.FindStringSubmatch(finalURL); m != nil {
@@ -116,6 +138,17 @@ func (c *Client) Reply(topicURL, message string) ReplyResult {
 		res.Message = "回复请求已提交，但未确认生成 replyid"
 	}
 	return res
+}
+
+// ReplyWithRetry 对明确未提交且可安全重试的失败做一次重试。
+func (c *Client) ReplyWithRetry(topicURL, message string) ReplyResult {
+	res := c.Reply(topicURL, message)
+	if !res.Retryable || res.Submitted || res.Confirmed {
+		return res
+	}
+	waitReplySubmitDelay()
+	// 只重试一次，避免重复扣款/重复提交风险。
+	return c.Reply(topicURL, message)
 }
 
 func (c *Client) fetchReplyForm(topicURL string) (*replyForm, int, error) {

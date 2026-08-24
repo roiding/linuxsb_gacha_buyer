@@ -13,18 +13,40 @@ import (
 	"gacha-buyer/internal/accounts"
 	"gacha-buyer/internal/config"
 	"gacha-buyer/internal/db"
+	"gacha-buyer/internal/site"
 )
+
+// replier 抽象回复客户端，便于测试替换真实站点请求。
+type replier interface {
+	Reply(topicURL, message string) site.ReplyResult
+	ReplyWithRetry(topicURL, message string) site.ReplyResult
+}
+
+// accountManager 抽象账号客户端获取，便于测试替换 Manager。
+type accountManager interface {
+	Sub(config.SubAccount) (replier, *accounts.Acct, error)
+}
+
+// engineDB 抽奖回复需要的数据库方法子集，便于测试替换。
+type engineDB interface {
+	LotteryReplyConfirmed(accountID, topicID int) bool
+	LotteryReplyPendingRecently(accountID, topicID int, since time.Time) bool
+	AddLotteryReply(r *db.LotteryReplyRow) error
+	GetAccount(role, username string) (*db.AccountRow, error)
+	ListLotteryReplies(limit int) ([]*db.LotteryReplyRow, error)
+}
 
 // Engine 抽奖回复执行器。它不自带定时器，只响应 Web 明确触发。
 type Engine struct {
 	cfg  *config.Config
-	mgr  *accounts.Manager
-	d    *db.DB
+	mgr  accountManager
+	d    engineDB
 	logf func(string, ...any)
 
 	mu      sync.Mutex
 	running bool
 	stopCh  chan struct{}
+	sleepFn func(time.Duration) bool
 }
 
 // ReplyLog 给 Web 展示的一条回复记录。
@@ -46,7 +68,41 @@ func New(cfg *config.Config, mgr *accounts.Manager, d *db.DB, logf func(string, 
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Engine{cfg: cfg, mgr: mgr, d: d, logf: logf}
+	eng := &Engine{cfg: cfg, d: d, logf: logf}
+	if mgr != nil {
+		eng.mgr = &managerAdapter{mgr: mgr}
+	}
+	return eng
+}
+
+type managerAdapter struct {
+	mgr *accounts.Manager
+}
+
+func (m *managerAdapter) Sub(sub config.SubAccount) (replier, *accounts.Acct, error) {
+	client, acct, err := m.mgr.Sub(sub)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, acct, nil
+}
+
+// NewWithMocks 创建可用于测试的 Engine。
+func NewWithMocks(cfg *config.Config, mgr accountManager, d engineDB, logf func(string, ...any)) *Engine {
+	eng := New(cfg, nil, nil, logf)
+	eng.mgr = mgr
+	eng.d = d
+	eng.sleepFn = func(d time.Duration) bool {
+		return true
+	}
+	return eng
+}
+
+// SetSleep 替换账号间等待，测试用。
+func (e *Engine) SetSleep(fn func(time.Duration) bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sleepFn = fn
 }
 
 // StartOnce 启动一轮任务；已有任务运行时返回 false。
@@ -144,18 +200,24 @@ func (e *Engine) runOnce(stopCh <-chan struct{}) {
 		}
 		content := messages[messageAt%len(messages)]
 		messageAt++
-		e.replyOne(stopCh, cfg, sub, topicID, content)
-		if i+1 < len(enabled) && !sleepInterruptible(stopCh, 20*time.Second+time.Duration(rand.Intn(40))*time.Second) {
-			return
+		res := e.replyOne(stopCh, cfg, sub, topicID, content)
+		if i+1 < len(enabled) {
+			cool := 65*time.Second + time.Duration(rand.Intn(45))*time.Second
+			if res != nil && res.Retryable {
+				cool = 90*time.Second + time.Duration(rand.Intn(60))*time.Second
+			}
+			if !e.sleep(stopCh, cool) {
+				return
+			}
 		}
 	}
 }
 
-func (e *Engine) replyOne(stopCh <-chan struct{}, cfg config.Config, sub config.SubAccount, topicID int, content string) {
+func (e *Engine) replyOne(stopCh <-chan struct{}, cfg config.Config, sub config.SubAccount, topicID int, content string) *site.ReplyResult {
 	row, err := e.d.GetAccount("sub", sub.Username)
 	if err != nil && err != db.ErrNotFound {
 		e.logf("[抽奖回复] %s 读取账号失败: %v", maskUser(sub.Username), err)
-		return
+		return nil
 	}
 	accountID := 0
 	if row != nil {
@@ -164,22 +226,22 @@ func (e *Engine) replyOne(stopCh <-chan struct{}, cfg config.Config, sub config.
 	name := maskUser(sub.Username)
 	if accountID > 0 && e.d.LotteryReplyConfirmed(accountID, topicID) {
 		e.logf("[抽奖回复] %s 已确认回复过 topic/%d，跳过", name, topicID)
-		return
+		return nil
 	}
 	if accountID > 0 && e.d.LotteryReplyPendingRecently(accountID, topicID, time.Now().Add(-24*time.Hour)) {
 		e.logf("[抽奖回复] %s 最近已提交但未确认，跳过", name)
-		return
+		return nil
 	}
 	log := &db.LotteryReplyRow{Time: time.Now(), AccountID: accountID, Sub: name, TopicID: topicID, Content: content, DryRun: cfg.DryRun}
 	if cfg.DryRun {
 		log.Message = "dry-run：仅记录，不提交回复"
 		_ = e.d.AddLotteryReply(log)
 		e.logf("[抽奖回复][DRY] %s → topic/%d：%s", name, topicID, content)
-		return
+		return nil
 	}
 	select {
 	case <-stopCh:
-		return
+		return nil
 	default:
 	}
 	client, acct, err := e.mgr.Sub(sub)
@@ -187,9 +249,9 @@ func (e *Engine) replyOne(stopCh <-chan struct{}, cfg config.Config, sub config.
 		log.Message = "登录失败: " + err.Error()
 		_ = e.d.AddLotteryReply(log)
 		e.logf("[抽奖回复] %s %s", name, log.Message)
-		return
+		return nil
 	}
-	res := client.Reply(cfg.Lottery.URL, content)
+	res := client.ReplyWithRetry(cfg.Lottery.URL, content)
 	log.AccountID = acct.ID
 	log.Captcha = res.NeedsCaptcha
 	log.Submitted, log.Confirmed, log.ReplyID, log.Message = res.Submitted, res.Confirmed, res.ReplyID, res.Message
@@ -197,6 +259,7 @@ func (e *Engine) replyOne(stopCh <-chan struct{}, cfg config.Config, sub config.
 		e.logf("[抽奖回复] %s 记录失败: %v", name, err)
 	}
 	e.logf("[抽奖回复] %s → topic/%d submitted=%v confirmed=%v %s", name, topicID, res.Submitted, res.Confirmed, res.Message)
+	return &res
 }
 
 func topicID(raw string) (int, error) {
@@ -213,6 +276,16 @@ func topicID(raw string) (int, error) {
 		return 0, errors.New("抽奖帖 ID 不合法")
 	}
 	return n, nil
+}
+
+func (e *Engine) sleep(stopCh <-chan struct{}, d time.Duration) bool {
+	e.mu.Lock()
+	fn := e.sleepFn
+	e.mu.Unlock()
+	if fn != nil {
+		return fn(d)
+	}
+	return sleepInterruptible(stopCh, d)
 }
 
 func sleepInterruptible(stopCh <-chan struct{}, d time.Duration) bool {
