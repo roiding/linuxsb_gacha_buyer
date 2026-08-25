@@ -56,7 +56,13 @@ func TestDonateRequiresConfirmedBalanceChange(t *testing.T) {
 }
 
 func TestDonateHardConditionIsNotRetryable(t *testing.T) {
-	for _, message := range []string{"注册未满3天，暂不能打赏", "账号注册时间不足三天", "当前不满足活动资格"} {
+	for _, message := range []string{
+		"注册未满3天，暂不能打赏",
+		"账号注册时间不足三天",
+		"当前不满足活动资格",
+		"操作失败 账号注册满 3 天后才能打赏",
+		"账号注册满3天后才能打赏",
+	} {
 		if isDonateRetryable(message) {
 			t.Fatalf("硬条件失败不应重试: %s", message)
 		}
