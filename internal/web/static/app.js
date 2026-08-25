@@ -88,18 +88,48 @@ function renderMarket(listings, rules, ssrPrices) {
 }
 
 // ---- 批量上架 / 下架 ----
+let bulkBusy = false;
+
+async function withBulkBusy(button, task) {
+  if (bulkBusy) return null;
+  const panel = $(".bulk-panel");
+  const controls = panel.querySelectorAll("input, select, button");
+  const label = button.textContent;
+  bulkBusy = true;
+  panel.classList.add("is-busy");
+  controls.forEach(control => { control.disabled = true; });
+  button.textContent = "处理中…";
+  try {
+    return await task();
+  } finally {
+    controls.forEach(control => { control.disabled = false; });
+    button.textContent = label;
+    panel.classList.remove("is-busy");
+    bulkBusy = false;
+  }
+}
+
 function renderBulkResult(res) {
   const el = $("#bulk-result");
   if (!res) return;
-  if (!res.items || !res.items.length) {
-    el.textContent = "没有可执行的操作（无匹配分类的可出售称号，或没有在售挂牌）。";
+  el.hidden = false;
+  const items = res.items || [];
+  if (!items.length) {
+    el.innerHTML = `<div class="bulk-summary"><strong>没有可执行的操作</strong><span>无匹配分类的可出售称号，或当前没有在售挂牌。</span></div>`;
     return;
   }
-  const lines = [];
-  for (const it of res.items) {
-    lines.push(`${it.ok ? "✓" : "✗"} ${it.name || "—"}${it.price ? " @" + it.price : ""} · ${it.message || ""}`);
-  }
-  el.innerHTML = `<b>成功 ${res.success} · 失败 ${res.failed}</b><br>` + lines.map(esc).join("<br>");
+  const lines = items.map(it => {
+    const name = esc(it.name || "未命名项目");
+    const price = it.price ? ` @${esc(it.price)}` : "";
+    const message = esc(it.message || "");
+    return `<div class="bulk-item ${it.ok ? "ok" : "fail"}">${it.ok ? "✓" : "✗"} ${name}${price} <span>· ${message}</span></div>`;
+  }).join("");
+  el.innerHTML = `<div class="bulk-summary"><strong>处理完成</strong><span class="bulk-success">成功 ${res.success || 0}</span><span class="bulk-failed">失败 ${res.failed || 0}</span><span>共 ${items.length} 项 · ${esc(fmtTime(new Date().toISOString()))}</span></div><div class="bulk-items">${lines}</div>`;
+}
+
+function refreshMarketAfterBulk() {
+  refreshStatus();
+  setTimeout(refreshStatus, 3000);
 }
 
 $("#bulk-publish-form").addEventListener("submit", async (ev) => {
@@ -107,28 +137,30 @@ $("#bulk-publish-form").addEventListener("submit", async (ev) => {
   const f = ev.target;
   const rarities = Array.from(f.rarities.options).filter(o => o.selected).map(o => o.value);
   const unitPrice = +f.unit_price.value || 0;
-  if (!rarities.length) { alert("请至少选择一个稀有度分类"); return; }
-  if (unitPrice <= 0) { alert("请填写统一单价"); return; }
+  if (!rarities.length) { notify("请至少选择一个稀有度分类", true); return; }
+  if (unitPrice <= 0) { notify("请填写统一单价", true); f.unit_price.focus(); return; }
   const btn = f.querySelector("button[type=submit]");
   try {
-    const res = await withBusy(btn, () => api("/api/market/publish", {
+    const res = await withBulkBusy(btn, () => api("/api/market/publish", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rarities, unit_price: unitPrice, duration_hours: +f.duration_hours.value || 24 }),
     }));
     renderBulkResult(res);
-  } catch (e) { alert(e.message); }
-  setTimeout(refreshStatus, 3000);
+    notify(`批量上架完成：成功 ${res.success || 0}，失败 ${res.failed || 0}`);
+  } catch (e) { notify(e.message, true); }
+  refreshMarketAfterBulk();
 });
 
 $("#btn-bulk-cancel").addEventListener("click", async () => {
-  if (!confirm("确定把当前账号全部在售挂牌撤回（下架）吗？")) return;
+  if (bulkBusy || !confirm("确定撤回当前主号全部在售挂牌吗？仓库中的称号不会被删除。")) return;
   const btn = $("#btn-bulk-cancel");
   try {
-    const res = await withBusy(btn, () => api("/api/market/cancel", { method: "POST" }));
+    const res = await withBulkBusy(btn, () => api("/api/market/cancel", { method: "POST" }));
     renderBulkResult(res);
-  } catch (e) { alert(e.message); }
-  setTimeout(refreshStatus, 3000);
+    notify(`批量下架完成：成功 ${res.success || 0}，失败 ${res.failed || 0}`);
+  } catch (e) { notify(e.message, true); }
+  refreshMarketAfterBulk();
 });
 
 async function refreshRecords() {

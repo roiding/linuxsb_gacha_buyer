@@ -63,32 +63,53 @@ const indexHTML = `<!doctype html>
         <div class="table-card"><div class="table-wrap"><table id="market-table">
           <thead><tr><th>称号</th><th>稀有度</th><th>单价</th><th>剩余</th><th>采购判定</th></tr></thead><tbody></tbody>
         </table></div></div>
-        <div class="section-head compact"><div><p class="eyebrow">BULK TRADING</p><h2>批量上架 / 下架</h2><p class="hint">对选中的稀有度分类，把当前主号“可出售”的称号按统一单价全部上架（数量=可出售数）；下架会把当前账号全部在售挂牌撤回。上架时长默认 24 小时。</p></div></div>
-        <div class="panel">
-          <form id="bulk-publish-form" class="inline-form">
-            <label>分类
-              <select name="rarities" multiple size="3">
-                <option value="n" selected>N</option>
-                <option value="r" selected>R</option>
-                <option value="sr" selected>SR</option>
-              </select>
-            </label>
-            <label>统一单价<input name="unit_price" type="number" min="1" class="num" placeholder="如 66"></label>
-            <label>时长
-              <select name="duration_hours">
-                <option value="1">1 小时</option>
-                <option value="6">6 小时</option>
-                <option value="12">12 小时</option>
-                <option value="24" selected>1 天</option>
-                <option value="72">3 天</option>
-                <option value="168">7 天</option>
-              </select>
-            </label>
-            <button type="submit" class="primary">批量上架</button>
-            <button type="button" id="btn-bulk-cancel" class="danger">批量下架全部在售</button>
+        <div class="section-head compact"><div><p class="eyebrow">BULK TRADING</p><h2>批量上架 / 下架</h2><p class="hint">按稀有度筛选可出售称号，统一设置价格和时长后一次上架；下架操作会撤回当前主号全部在售挂牌。</p></div></div>
+        <section class="panel bulk-panel" aria-labelledby="bulk-panel-title">
+          <div class="bulk-panel-head">
+            <div>
+              <span class="section-kicker">PUBLISH SETTINGS</span>
+              <h3 id="bulk-panel-title">上架设置</h3>
+              <p class="hint">数量按仓库中的可出售数自动计算，佩戴中的称号不会被上架。</p>
+            </div>
+            <span class="bulk-badge">主号市场</span>
+          </div>
+          <form id="bulk-publish-form" class="bulk-form">
+            <div class="bulk-fields">
+              <label class="bulk-field bulk-rarity-field">稀有度 <span class="field-note">可多选</span>
+                <select name="rarities" multiple size="3" aria-label="选择要上架的稀有度" aria-describedby="bulk-rarity-help">
+                  <option value="n" selected>N</option>
+                  <option value="r" selected>R</option>
+                  <option value="sr" selected>SR</option>
+                </select>
+                <small id="bulk-rarity-help">按住 Cmd/Ctrl 可选择多个分类</small>
+              </label>
+              <label class="bulk-field">统一单价 <span class="field-note">积分 / 个</span>
+                <input name="unit_price" type="number" min="1" class="num" placeholder="例如 66" required aria-label="称号统一单价">
+                <small>所有选中称号使用同一价格</small>
+              </label>
+              <label class="bulk-field">上架时长
+                <select name="duration_hours" aria-label="选择上架时长">
+                  <option value="1">1 小时</option>
+                  <option value="6">6 小时</option>
+                  <option value="12">12 小时</option>
+                  <option value="24" selected>1 天</option>
+                  <option value="72">3 天</option>
+                  <option value="168">7 天</option>
+                </select>
+                <small>到期后需要重新上架</small>
+              </label>
+            </div>
+            <div class="bulk-actions">
+              <div class="bulk-action-copy"><strong>准备好后开始上架</strong><span>将逐个处理匹配分类的可出售称号</span></div>
+              <button type="submit" class="primary">批量上架</button>
+            </div>
           </form>
-          <p class="hint schedule-line" id="bulk-result"></p>
-        </div>
+          <div class="bulk-danger">
+            <div><strong>批量下架</strong><span>撤回当前主号全部在售挂牌，不会影响仓库称号。</span></div>
+            <button type="button" id="btn-bulk-cancel" class="danger">撤回全部挂牌</button>
+          </div>
+          <div id="bulk-result" class="bulk-result" aria-live="polite" aria-atomic="false" hidden></div>
+        </section>
       </section>
 
       <section id="tab-records" class="tab">
