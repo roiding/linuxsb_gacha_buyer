@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gacha-buyer/internal/accounts"
@@ -31,6 +32,7 @@ func newTestServer(t *testing.T) (*Server, *config.Config) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eng.Mgr = mgr // 主号未配置时快速失败，避免测试发真实登录请求
 	col := collector.New(&cfg, mgr, d, nil)
 	lot := lottery.New(&cfg, mgr, d, nil)
 	return New(&cfg, d, st, eng, mgr, col, lot), &cfg
@@ -103,5 +105,70 @@ func TestCollectorPostAndTransfersPlans(t *testing.T) {
 	p := out.Status.Plans[0]
 	if p.PlannedAt == "" || p.Status != "planned" {
 		t.Fatalf("计划字段错误: %+v", p)
+	}
+}
+
+func TestConfigPostTriggersDeepScanHint(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := httptest.NewRecorder()
+	body := `{"rules":{"sr":30,"r":10,"n":4},"scan_sec":5}`
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/config", bytes.NewBufferString(body)))
+	if rec.Code != 200 {
+		t.Fatalf("POST /api/config: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		OK      bool   `json:"ok"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK {
+		t.Fatalf("保存配置应成功: %+v", out)
+	}
+	// 测试环境未配主号，深度收购会给出未触发提示；正式环境配了主号会后台开始扫描。
+	if !strings.Contains(out.Message, "深度收购") {
+		t.Fatalf("保存采购设置后应返回深度收购提示: %q", out.Message)
+	}
+}
+
+func TestMarketPublishCancelRoutes(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/market/publish",
+		bytes.NewBufferString(`{"rarities":["n","r","sr"],"unit_price":66,"duration_hours":24}`)))
+	if rec.Code != 200 {
+		t.Fatalf("POST /api/market/publish: %d %s", rec.Code, rec.Body.String())
+	}
+	var pub struct {
+		Success int `json:"success"`
+		Failed  int `json:"failed"`
+		Items   []struct {
+			Message string `json:"message"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pub); err != nil {
+		t.Fatal(err)
+	}
+	if pub.Failed != 1 || len(pub.Items) != 1 {
+		t.Fatalf("未配主号时应返回 1 条失败提示: %+v", pub)
+	}
+
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/market/cancel", nil))
+	if rec.Code != 200 {
+		t.Fatalf("POST /api/market/cancel: %d %s", rec.Code, rec.Body.String())
+	}
+	var can struct {
+		Items []struct {
+			Message string `json:"message"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &can); err != nil {
+		t.Fatal(err)
+	}
+	if len(can.Items) != 1 {
+		t.Fatalf("未配主号时应返回 1 条失败提示: %+v", can)
 	}
 }

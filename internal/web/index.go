@@ -63,6 +63,32 @@ const indexHTML = `<!doctype html>
         <div class="table-card"><div class="table-wrap"><table id="market-table">
           <thead><tr><th>称号</th><th>稀有度</th><th>单价</th><th>剩余</th><th>采购判定</th></tr></thead><tbody></tbody>
         </table></div></div>
+        <div class="section-head compact"><div><p class="eyebrow">BULK TRADING</p><h2>批量上架 / 下架</h2><p class="hint">对选中的稀有度分类，把当前主号“可出售”的称号按统一单价全部上架（数量=可出售数）；下架会把当前账号全部在售挂牌撤回。上架时长默认 24 小时。</p></div></div>
+        <div class="panel">
+          <form id="bulk-publish-form" class="inline-form">
+            <label>分类
+              <select name="rarities" multiple size="3">
+                <option value="n" selected>N</option>
+                <option value="r" selected>R</option>
+                <option value="sr" selected>SR</option>
+              </select>
+            </label>
+            <label>统一单价<input name="unit_price" type="number" min="1" class="num" placeholder="如 66"></label>
+            <label>时长
+              <select name="duration_hours">
+                <option value="1">1 小时</option>
+                <option value="6">6 小时</option>
+                <option value="12">12 小时</option>
+                <option value="24" selected>1 天</option>
+                <option value="72">3 天</option>
+                <option value="168">7 天</option>
+              </select>
+            </label>
+            <button type="submit" class="primary">批量上架</button>
+            <button type="button" id="btn-bulk-cancel" class="danger">批量下架全部在售</button>
+          </form>
+          <p class="hint schedule-line" id="bulk-result"></p>
+        </div>
       </section>
 
       <section id="tab-records" class="tab">

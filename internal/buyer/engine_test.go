@@ -7,6 +7,7 @@ import (
 	"gacha-buyer/internal/config"
 	"gacha-buyer/internal/db"
 	"gacha-buyer/internal/market"
+	"gacha-buyer/internal/site"
 	"gacha-buyer/internal/store"
 )
 
@@ -62,5 +63,64 @@ func TestMatchZeroLimitSkips(t *testing.T) {
 	}
 	if got := e.match(all); len(got) != 0 {
 		t.Fatalf("未配置稀有度不应买: %+v", got)
+	}
+}
+
+func TestActiveRarities(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Rules = config.PriceRules{N: 4, R: 10, SR: 30, UR: 0} // UR 限价为 0 不采购
+	cfg.SSRPrices = map[string]int{"欧皇": 200}
+
+	got := activeRarities(&cfg)
+	want := []market.Rarity{market.N, market.R, market.SR, market.SSR}
+	if len(got) != len(want) {
+		t.Fatalf("启用分类数量错误: %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("分类顺序错误: got=%v want=%v", got, want)
+		}
+	}
+
+	cfg.SSRPrices = nil
+	got = activeRarities(&cfg)
+	if len(got) != 3 || got[0] != market.N || got[1] != market.R || got[2] != market.SR {
+		t.Fatalf("无 SSR 价格时不应包含 SSR 分类: %v", got)
+	}
+
+	none := config.Defaults()
+	none.Rules = config.PriceRules{}
+	none.SSRPrices = nil
+	if got := activeRarities(&none); len(got) != 0 {
+		t.Fatalf("全部限价为 0 时不应启用任何分类: %v", got)
+	}
+}
+
+func TestPublishCandidates(t *testing.T) {
+	catalog := []market.Title{
+		{Name: "欧皇", Rarity: market.SSR},
+		{Name: "打酱油的", Rarity: market.N},
+		{Name: "话题王", Rarity: market.R},
+		{Name: "论坛之星", Rarity: market.SR},
+	}
+	publishable := []site.PublishableTitle{
+		{TitleID: 16, Name: "欧皇", Sellable: 1},
+		{TitleID: 5, Name: "打酱油的", Sellable: 2},
+		{TitleID: 8, Name: "话题王", Sellable: 1},
+		{TitleID: 13, Name: "论坛之星", Sellable: 1},
+		{TitleID: 99, Name: "未知称号", Sellable: 3},
+	}
+	got := publishCandidates(publishable, catalog, map[market.Rarity]bool{
+		market.N:  true,
+		market.SR: true,
+	})
+	if len(got) != 2 {
+		t.Fatalf("应筛出 N+SR 共 2 个: %+v", got)
+	}
+	if got[0].Name != "打酱油的" || got[0].Sellable != 2 {
+		t.Fatalf("打酱油的候选错误: %+v", got[0])
+	}
+	if got[1].Name != "论坛之星" {
+		t.Fatalf("论坛之星候选错误: %+v", got[1])
 	}
 }

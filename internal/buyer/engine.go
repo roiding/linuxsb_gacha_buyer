@@ -35,6 +35,10 @@ type Engine struct {
 	points     int
 	loggedIn   bool
 
+	// scanMu 串行化常规扫描（scanOnce）与配置变更后的分类深度收购（deepScan），
+	// 避免两个流程并发对同一挂牌下单。
+	scanMu sync.Mutex
+
 	client *site.Client
 }
 
@@ -165,6 +169,9 @@ func (e *Engine) Snapshot() Status {
 
 // scanOnce 单轮：登录保活 → 抓市场 → 匹配 → 下单。
 func (e *Engine) scanOnce() {
+	e.scanMu.Lock()
+	defer e.scanMu.Unlock()
+
 	e.mu.Lock()
 	cfg := *e.cfg
 	client := e.client
@@ -223,10 +230,233 @@ func (e *Engine) scanOnce() {
 	e.recordError(nil)
 }
 
+// DeepScanNow 立即按采购配置启用的稀有度分类（N/R/SR/UR/SSR）以价格升序各扫一遍市场并收购，
+// 覆盖"最新发布 100 条"之外的便宜挂牌。先确保会话可用，扫描在后台执行。
+func (e *Engine) DeepScanNow() error {
+	if err := e.ensureClient(e.cfg); err != nil {
+		return err
+	}
+	go e.deepScan()
+	return nil
+}
+
+func (e *Engine) deepScan() {
+	e.scanMu.Lock()
+	defer e.scanMu.Unlock()
+	cfg := *e.cfg
+	e.mu.Lock()
+	client := e.client
+	e.mu.Unlock()
+	rarities := activeRarities(&cfg)
+	if len(rarities) == 0 {
+		e.logf("深度收购：没有启用任何采购分类，跳过")
+		return
+	}
+	for _, r := range rarities {
+		select {
+		case <-e.stopped():
+			return
+		default:
+		}
+		listings, err := client.FetchMarketFiltered(string(r), "price_asc")
+		if err != nil {
+			e.logf("深度收购 %s 分类抓取失败: %v", r, err)
+			continue
+		}
+		bought := 0
+		for _, l := range listings {
+			limit := limitFor(&cfg, l)
+			if limit <= 0 || l.Remain <= 0 {
+				continue
+			}
+			if l.Price > limit {
+				break // price_asc 升序，后续挂牌只会更贵
+			}
+			e.buyOne(client, l)
+			bought++
+		}
+		e.logf("深度收购 %s：在售 %d 条，命中并尝试 %d 条", r, len(listings), bought)
+	}
+	e.logf("深度收购完成")
+}
+
+// activeRarities 返回采购配置中启用的稀有度分类（对应限价 > 0）。
+func activeRarities(cfg *config.Config) []market.Rarity {
+	var out []market.Rarity
+	if cfg.Rules.N > 0 {
+		out = append(out, market.N)
+	}
+	if cfg.Rules.R > 0 {
+		out = append(out, market.R)
+	}
+	if cfg.Rules.SR > 0 {
+		out = append(out, market.SR)
+	}
+	if cfg.Rules.UR > 0 {
+		out = append(out, market.UR)
+	}
+	if len(cfg.SSRPrices) > 0 {
+		out = append(out, market.SSR)
+	}
+	return out
+}
+
 func (e *Engine) stopped() <-chan struct{} {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.stopCh
+}
+
+// BulkItem 批量操作单条结果。
+type BulkItem struct {
+	Name    string `json:"name"`
+	Price   int    `json:"price"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
+// BulkResult 批量操作汇总。
+type BulkResult struct {
+	Success int        `json:"success"`
+	Failed  int        `json:"failed"`
+	Items   []BulkItem `json:"items"`
+}
+
+func (r *BulkResult) add(item BulkItem) {
+	r.Items = append(r.Items, item)
+	if item.OK {
+		r.Success++
+	} else {
+		r.Failed++
+	}
+}
+
+// marketOpWait 批量上架/下架中每个操作之间的间隔。
+var marketOpWait = func() time.Duration { return 600 * time.Millisecond }
+
+// BulkPublish 把指定稀有度分类的可出售称号按统一单价批量上架（数量=可出售数）。
+// 与常规扫描互斥执行；同步阻塞直至完成。
+func (e *Engine) BulkPublish(rarities []market.Rarity, unitPrice, durationHours int) BulkResult {
+	var res BulkResult
+	e.scanMu.Lock()
+	defer e.scanMu.Unlock()
+	cfg := *e.cfg
+	e.mu.Lock()
+	client := e.client
+	e.mu.Unlock()
+	if client == nil {
+		if err := e.ensureClient(&cfg); err != nil {
+			res.add(BulkItem{Message: "主号会话不可用: " + err.Error()})
+			return res
+		}
+		e.mu.Lock()
+		client = e.client
+		e.mu.Unlock()
+	}
+	if unitPrice <= 0 {
+		res.add(BulkItem{Message: "单价必须大于 0"})
+		return res
+	}
+	if durationHours <= 0 {
+		durationHours = 24
+	}
+	want := map[market.Rarity]bool{}
+	for _, r := range rarities {
+		want[r] = true
+	}
+	if len(want) == 0 {
+		res.add(BulkItem{Message: "未选择任何稀有度分类"})
+		return res
+	}
+	publishable, err := client.FetchPublishableTitles()
+	if err != nil {
+		res.add(BulkItem{Message: "读取可出售称号失败: " + err.Error()})
+		return res
+	}
+	catalog, err := client.FetchTitleCatalog()
+	if err != nil {
+		res.add(BulkItem{Message: "读取称号目录失败: " + err.Error()})
+		return res
+	}
+	candidates := publishCandidates(publishable, catalog, want)
+	for _, p := range candidates {
+		select {
+		case <-e.stopped():
+			res.add(BulkItem{Name: p.Name, Message: "批量上架被停止"})
+			return res
+		default:
+		}
+		pr := client.PublishTitle(p.TitleID, p.Sellable, unitPrice, durationHours)
+		e.logf("上架 %s ×%d @%d → ok=%v %s", p.Name, p.Sellable, unitPrice, pr.OK, pr.Message)
+		res.add(BulkItem{Name: p.Name, Price: unitPrice, OK: pr.OK, Message: pr.Message})
+		e.waitMarketOp()
+	}
+	return res
+}
+
+// publishCandidates 从可出售称号中筛出指定分类、可出售数 > 0 的候选。
+func publishCandidates(publishable []site.PublishableTitle, catalog []market.Title, want map[market.Rarity]bool) []site.PublishableTitle {
+	rarityOf := make(map[string]market.Rarity, len(catalog))
+	for _, t := range catalog {
+		rarityOf[t.Name] = t.Rarity
+	}
+	var out []site.PublishableTitle
+	for _, p := range publishable {
+		r, ok := rarityOf[p.Name]
+		if !ok || !want[r] || p.Sellable <= 0 {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// BulkCancel 把当前账号在售的挂牌全部撤回（下架）。与常规扫描互斥执行。
+func (e *Engine) BulkCancel() BulkResult {
+	var res BulkResult
+	e.scanMu.Lock()
+	defer e.scanMu.Unlock()
+	cfg := *e.cfg
+	e.mu.Lock()
+	client := e.client
+	e.mu.Unlock()
+	if client == nil {
+		if err := e.ensureClient(&cfg); err != nil {
+			res.add(BulkItem{Message: "主号会话不可用: " + err.Error()})
+			return res
+		}
+		e.mu.Lock()
+		client = e.client
+		e.mu.Unlock()
+	}
+	ids, err := client.MyListingIDs()
+	if err != nil {
+		res.add(BulkItem{Message: "读取我的挂牌失败: " + err.Error()})
+		return res
+	}
+	for _, id := range ids {
+		select {
+		case <-e.stopped():
+			res.add(BulkItem{Message: "批量下架被停止"})
+			return res
+		default:
+		}
+		cr := client.CancelListing(id)
+		e.logf("下架 listing#%d → ok=%v %s", id, cr.OK, cr.Message)
+		res.add(BulkItem{Name: fmt.Sprintf("listing#%d", id), OK: cr.OK, Message: cr.Message})
+		e.waitMarketOp()
+	}
+	return res
+}
+
+// waitMarketOp 批量操作间的小间隔，可被停止中断。
+func (e *Engine) waitMarketOp() {
+	timer := time.NewTimer(marketOpWait())
+	defer timer.Stop()
+	select {
+	case <-e.stopCh:
+	case <-timer.C:
+	}
 }
 
 func isSessionLost(err error) bool {

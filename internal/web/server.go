@@ -59,6 +59,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/collector/run", s.handleCollectorRun)
 	mux.HandleFunc("/api/lottery", s.handleLottery)
 	mux.HandleFunc("/api/lottery/run", s.handleLotteryRun)
+	mux.HandleFunc("/api/market/publish", s.handleMarketPublish)
+	mux.HandleFunc("/api/market/cancel", s.handleMarketCancel)
 	return mux
 }
 
@@ -172,8 +174,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			httpError(w, 500, "保存配置失败: "+err.Error())
 			return
 		}
-		// 收购参数变更立即由引擎下次扫描读取。
-		writeJSON(w, map[string]any{"ok": true})
+		// 收购参数变更立即由引擎下次扫描读取；同时按启用的稀有度分类触发一次深度收购，
+		// 覆盖"最新发布 100 条"之外的便宜挂牌（后台执行，不阻塞保存请求）。
+		if err := s.eng.DeepScanNow(); err != nil {
+			writeJSON(w, map[string]any{"ok": true, "message": "配置已保存，但分类深度收购未触发: " + err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "message": "配置已保存，分类深度收购已开始"})
 	default:
 		httpError(w, 405, "方法不允许")
 	}

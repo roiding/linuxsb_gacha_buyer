@@ -83,9 +83,53 @@ function renderMarket(listings, rules, ssrPrices) {
       <td>${rarityBadge(l.rarity)}</td>
       <td>${l.price}</td><td>${l.remain}</td>
       <td class="${hit ? "hit" : "miss"}">${hit ? `✓ 收（限 ≤${limit}）` : "—"}</td>`;
-    tb.appendChild(tr);
-  }
+      tb.appendChild(tr);
+    }
 }
+
+// ---- 批量上架 / 下架 ----
+function renderBulkResult(res) {
+  const el = $("#bulk-result");
+  if (!res) return;
+  if (!res.items || !res.items.length) {
+    el.textContent = "没有可执行的操作（无匹配分类的可出售称号，或没有在售挂牌）。";
+    return;
+  }
+  const lines = [];
+  for (const it of res.items) {
+    lines.push(`${it.ok ? "✓" : "✗"} ${it.name || "—"}${it.price ? " @" + it.price : ""} · ${it.message || ""}`);
+  }
+  el.innerHTML = `<b>成功 ${res.success} · 失败 ${res.failed}</b><br>` + lines.map(esc).join("<br>");
+}
+
+$("#bulk-publish-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const rarities = Array.from(f.rarities.options).filter(o => o.selected).map(o => o.value);
+  const unitPrice = +f.unit_price.value || 0;
+  if (!rarities.length) { alert("请至少选择一个稀有度分类"); return; }
+  if (unitPrice <= 0) { alert("请填写统一单价"); return; }
+  const btn = f.querySelector("button[type=submit]");
+  try {
+    const res = await withBusy(btn, () => api("/api/market/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rarities, unit_price: unitPrice, duration_hours: +f.duration_hours.value || 24 }),
+    }));
+    renderBulkResult(res);
+  } catch (e) { alert(e.message); }
+  setTimeout(refreshStatus, 3000);
+});
+
+$("#btn-bulk-cancel").addEventListener("click", async () => {
+  if (!confirm("确定把当前账号全部在售挂牌撤回（下架）吗？")) return;
+  const btn = $("#btn-bulk-cancel");
+  try {
+    const res = await withBusy(btn, () => api("/api/market/cancel", { method: "POST" }));
+    renderBulkResult(res);
+  } catch (e) { alert(e.message); }
+  setTimeout(refreshStatus, 3000);
+});
 
 async function refreshRecords() {
   try {
