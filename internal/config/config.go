@@ -176,8 +176,8 @@ func (c *Config) Normalize() {
 	for len(c.Site) > 0 && c.Site[len(c.Site)-1] == '/' {
 		c.Site = c.Site[:len(c.Site)-1]
 	}
-	if c.ScanSec < 30 {
-		c.ScanSec = 30
+	if c.ScanSec < 1 {
+		c.ScanSec = 1
 	}
 	if c.MinBalance < 0 {
 		c.MinBalance = 0

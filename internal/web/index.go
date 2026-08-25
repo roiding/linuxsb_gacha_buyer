@@ -133,7 +133,7 @@ const indexHTML = `<!doctype html>
             <div class="field-grid"><label>SR 上限<input name="sr" type="number" min="0" class="num"></label><label>R 上限<input name="r" type="number" min="0" class="num"></label><label>N 上限<input name="n" type="number" min="0" class="num"></label><label>UR 上限<input name="ur" type="number" min="0" class="num"></label></div>
           </fieldset>
           <fieldset><legend>余额与节奏</legend><p class="hint">不限制总采购额度和每轮数量，只保留账号余额保护线。</p>
-            <div class="field-grid"><label>余额保护线<input name="min_balance" type="number" min="0" class="num"></label><label>扫描间隔（秒）<input name="scan_sec" type="number" min="30" class="num"></label></div>
+            <div class="field-grid"><label>余额保护线<input name="min_balance" type="number" min="0" class="num"></label><label>扫描间隔（秒）<input name="scan_sec" type="number" min="1" class="num"></label></div>
           </fieldset>
           <div class="settings-actions"><button type="submit" class="primary">保存采购设置</button><span id="save-msg"></span></div>
         </form>

@@ -99,7 +99,7 @@ async function refreshRecords() {
       const submitted = !!p.submitted || confirmed || !!p.dry_run;
       const cls = p.dry_run ? "dry" : (confirmed ? "hit" : (submitted ? "dry" : "fail"));
       const label = p.dry_run ? "[dry] 仅模拟" : (confirmed ? "✓ 已确认成交" : (submitted ? "↗ 已提交，未确认" : "✗ 未成交"));
-      const time = p.time ? String(p.time).replace("T", " ").slice(0, 19) : "-";
+      const time = fmtTime(p.time);
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${esc(time)}</td>
         <td>${esc(p.name || "-")}</td><td>${rarityBadge(p.rarity)}</td>
@@ -113,6 +113,19 @@ async function refreshRecords() {
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// fmtTime 把后端返回的 ISO 时间（UTC）显示为北京时间（Asia/Shanghai）。
+function fmtTime(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const get = (t) => (parts.find(p => p.type === t) || {}).value || "";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 // ---- 引擎控制 ----
@@ -231,7 +244,7 @@ async function refreshLottery() {
     for (const x of d.records || []) {
       const cls = x.dry_run ? "dry" : (x.confirmed ? "hit" : (x.submitted ? "dry" : "fail"));
       const label = x.dry_run ? "[dry] 仅记录" : (x.confirmed ? `✓ 已确认 #${x.reply_id || ""}` : (x.submitted ? "↗ 已提交，未确认" : "✗ 未提交"));
-      const time = x.time ? String(x.time).replace("T", " ").slice(0, 19) : "-";
+      const time = fmtTime(x.time);
       tb.insertAdjacentHTML("beforeend", `<tr><td>${esc(time)}</td><td>${esc(x.sub || "-")}</td><td>#${x.topic_id || "-"}</td><td class="hint">${esc(x.content || "")}</td><td>${x.captcha ? "✓" : "-"}</td><td class="${cls}">${label} · ${esc(x.message || "")}</td></tr>`);
     }
   } catch (e) { console.error(e); }
@@ -401,7 +414,7 @@ async function refreshTransfers() {
         const tr = document.createElement("tr");
         const got = g.drawn ? esc(g.drawn) : (g.ok ? "空包" : "-");
         const gift = g.gifted ? "✓ 已赠送" : (g.drawn && g.ok ? "⏳ 待赠送" : "-");
-        tr.innerHTML = `<td>${(g.time || "").replace("T", " ").slice(0, 19)}</td>
+        tr.innerHTML = `<td>${fmtTime(g.time)}</td>
           <td>${esc(g.sub)}</td><td>${got}</td>
           <td class="${g.gifted ? "hit" : ""}">${gift}${g.gift_target ? " → " + esc(g.gift_target) : ""}</td>
           <td>${esc(g.message || "")}</td>`;
@@ -413,7 +426,7 @@ async function refreshTransfers() {
       const label = t.dry_run ? "[dry] 仅记录" : (t.pending ? "⏳ 已提交，待核验" : (!t.retryable && !t.ok ? "⚠ 硬条件未满足，本日不重试" : (t.confirmed ? "✓ 已确认" : (t.submitted ? "↗ 已提交，未确认" : (t.ok ? "— 无需归集" : "✗ 未成功")))));
       const verify = t.balance_before || t.balance_after ? ` · 余额 ${t.balance_before || "-"}→${t.balance_after || "-"}` : "";
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${(t.time || "").replace("T", " ").slice(0, 19)}</td>
+      tr.innerHTML = `<td>${fmtTime(t.time)}</td>
         <td>${esc(t.sub)}</td><td>${t.check_in ? "✓" : "-"}</td>
         <td>${t.balance}</td><td>${t.tip_amount || "-"}</td>
         <td>${t.topic_id ? "#" + t.topic_id : "-"}</td>
