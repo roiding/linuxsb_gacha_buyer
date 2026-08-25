@@ -99,23 +99,28 @@ const indexHTML = `<!doctype html>
           </details>
         </article>
         <article class="panel account-panel">
-	          <div class="panel-head"><div><span class="section-kicker">DAILY TRANSFER</span><h3>每日积分归集</h3><p class="hint">每天在配置窗口内生成一个持久化随机时间；容器重启会继续当天尚未完成的小号。</p></div><button id="btn-collector-run">立即执行一轮</button></div>
+	          <div class="panel-head"><div><span class="section-kicker">DAILY TRANSFER</span><h3>每日积分归集</h3><p class="hint">每个小号在当天 0–24 点各有一个独立随机时刻，分散执行；重启会补跑当天未完成的小号。</p></div><button id="btn-collector-run">立即执行一轮</button></div>
 
           <form id="collector-form" class="inline-form">
             <label>固定帖子 ID<input name="topic_id" type="number" min="0" class="num" value="0"></label>
             <label>小号保留积分<input name="keep" type="number" min="0" class="num"></label>
-	            <label>每日窗口起点<input name="at_hour" type="number" min="0" max="23" class="num"></label>
-	            <label>随机窗口（分钟）<input name="random_window_min" type="number" min="1" max="720" class="num"></label>
-
+            <label>单次最低打赏<input name="min_tip" type="number" min="1" class="num"></label>
             <label>打赏备注<input name="tip_message" placeholder="可留空"></label>
             <button type="submit" class="primary">保存归集设置</button>
           </form>
           <p class="hint schedule-line" id="collector-status"></p>
+          <div class="table-wrap"><table id="collector-plans-table">
+            <thead><tr><th>小号</th><th>计划时刻</th><th>开始</th><th>完成</th><th>状态</th></tr></thead><tbody></tbody>
+          </table></div>
         </article>
       </section>
 
       <section id="tab-transfers" class="tab">
         <div class="section-head"><div><p class="eyebrow">TRANSFER HISTORY</p><h2>归集记录</h2><p class="hint">记录签到、余额、帖子与打赏结果。</p></div></div>
+        <div class="section-head compact"><div><p class="eyebrow">DAILY FREE GACHA</p><h2>每日免费一抽</h2><p class="hint">随归集任务执行：小号签到后抽一次每日免费卡池，抽到的称号自动赠送给主号（可赠送数=持有数−佩戴中的 1 张）；空包仅记录。</p></div></div>
+        <div class="table-card"><div class="table-wrap"><table id="gacha-table">
+          <thead><tr><th>时间</th><th>小号</th><th>所得</th><th>赠送</th><th>说明</th></tr></thead><tbody></tbody>
+        </table></div></div>
         <div class="table-card"><div class="table-wrap"><table id="transfers-table">
           <thead><tr><th>时间</th><th>小号</th><th>签到</th><th>余额</th><th>打赏金额</th><th>帖子</th><th>结果</th></tr></thead><tbody></tbody>
         </table></div></div>

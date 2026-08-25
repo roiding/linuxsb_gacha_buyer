@@ -298,8 +298,7 @@ async function refreshAccounts() {
     const f = $("#collector-form");
     f.topic_id.value = col.topic_id || 0;
     f.keep.value = col.keep ?? 5;
-    f.at_hour.value = col.at_hour ?? 9;
-    f.random_window_min.value = col.random_window_min ?? 60;
+    f.min_tip.value = col.min_tip ?? 1;
     f.tip_message.value = col.message || "";
   } catch (e) { console.error(e); }
 }
@@ -361,7 +360,7 @@ $("#sub-acct-form").addEventListener("submit", async (ev) => {
 $("#collector-form").addEventListener("submit", async (ev) => {
   ev.preventDefault(); const f = ev.target;
   try {
-    await api("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ collector: { topic_id: +f.topic_id.value || 0, keep: +f.keep.value, at_hour: +f.at_hour.value, random_window_min: +f.random_window_min.value, message: f.tip_message.value } }) });
+    await api("/api/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ collector: { topic_id: +f.topic_id.value || 0, keep: +f.keep.value, min_tip: +f.min_tip.value || 1, message: f.tip_message.value } }) });
     alert("归集设置已保存 ✓"); refreshAccounts();
   } catch (e) { alert(e.message); }
 });
@@ -370,11 +369,45 @@ async function refreshTransfers() {
   try {
     const d = await api("/api/transfers");
     const s = d.status || {};
+    const plans = s.plans || [];
+    const done = plans.filter(p => p.status === "completed").length;
     $("#collector-status").textContent =
-      (s.running ? `调度中 · 下次 ${s.next_run || "-"}` : "调度未运行") +
-      (s.last_run ? ` · 上次执行 ${s.last_run}` : "");
+      (s.running ? "调度中" : "调度未运行") +
+      (s.next_run ? ` · 下次 ${s.next_run}` : "") +
+      (s.last_run ? ` · 上次执行 ${s.last_run}` : "") +
+      ` · 已排 ${plans.length} 号 / 完成 ${done}`;
+    const ptb = $("#collector-plans-table tbody");
+    ptb.innerHTML = "";
+    if (!plans.length) {
+      ptb.innerHTML = `<tr><td colspan="5" class="empty">今天还没有生成计划，启动引擎或保存归集设置后生成。</td></tr>`;
+    } else {
+      const planStatus = { planned: "⏳ 待执行", running: "▶ 执行中", retry: "↻ 稍后重试", completed: "✓ 已完成" };
+      for (const p of plans) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${esc(p.account)}</td><td>${esc(p.planned_at)}</td>
+          <td>${esc(p.started_at || "-")}</td><td>${esc(p.completed_at || "-")}</td>
+          <td class="${p.status === "completed" ? "hit" : (p.status === "retry" ? "dry" : "")}">${planStatus[p.status] || esc(p.status)}</td>`;
+        ptb.appendChild(tr);
+      }
+    }
     const tb = $("#transfers-table tbody");
     tb.innerHTML = "";
+    const gt = $("#gacha-table tbody");
+    gt.innerHTML = "";
+    if (!(d.gacha || []).length) {
+      gt.innerHTML = `<tr><td colspan="5" class="empty">今日抽卡记录会随归集任务生成。</td></tr>`;
+    } else {
+      for (const g of d.gacha || []) {
+        const tr = document.createElement("tr");
+        const got = g.drawn ? esc(g.drawn) : (g.ok ? "空包" : "-");
+        const gift = g.gifted ? "✓ 已赠送" : (g.drawn && g.ok ? "⏳ 待赠送" : "-");
+        tr.innerHTML = `<td>${(g.time || "").replace("T", " ").slice(0, 19)}</td>
+          <td>${esc(g.sub)}</td><td>${got}</td>
+          <td class="${g.gifted ? "hit" : ""}">${gift}${g.gift_target ? " → " + esc(g.gift_target) : ""}</td>
+          <td>${esc(g.message || "")}</td>`;
+        gt.appendChild(tr);
+      }
+    }
     for (const t of d.transfers || []) {
       const cls = t.pending ? "dry" : (t.confirmed ? "hit" : (t.submitted ? "dry" : (t.ok ? "hit" : "fail")));
       const label = t.dry_run ? "[dry] 仅记录" : (t.pending ? "⏳ 已提交，待核验" : (!t.retryable && !t.ok ? "⚠ 硬条件未满足，本日不重试" : (t.confirmed ? "✓ 已确认" : (t.submitted ? "↗ 已提交，未确认" : (t.ok ? "— 无需归集" : "✗ 未成功")))));

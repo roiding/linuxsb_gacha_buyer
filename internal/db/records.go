@@ -1,6 +1,10 @@
 package db
 
-import "time"
+import (
+	"database/sql"
+	"errors"
+	"time"
+)
 
 // PurchaseRow purchases 表存储模型。
 type PurchaseRow struct {
@@ -205,44 +209,52 @@ func (d *DB) GetPendingTransfer(accountID int, _ time.Time) (*TransferRow, error
 	return &t, nil
 }
 
-// CollectorSchedule 每日归集计划。
+// CollectorSchedule 每日归集计划，按“天+小号”一行。
 type CollectorSchedule struct {
 	Day         string    `json:"day"`
+	Account     string    `json:"account"`
 	PlannedAt   time.Time `json:"planned_at"`
 	StartedAt   time.Time `json:"started_at,omitempty"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 	Status      string    `json:"status"`
 }
 
-// GetCollectorSchedule 读取指定自然日的归集计划。
-func (d *DB) GetCollectorSchedule(day string) (*CollectorSchedule, error) {
-	var s CollectorSchedule
-	var planned, started, completed string
-	err := d.QueryRow(`SELECT day, planned_at, started_at, completed_at, status FROM collector_schedule WHERE day=?`, day).
-		Scan(&s.Day, &planned, &started, &completed, &s.Status)
+// GetCollectorSchedules 读取指定自然日全部小号的归集计划。
+func (d *DB) GetCollectorSchedules(day string) ([]*CollectorSchedule, error) {
+	rows, err := d.Query(`SELECT day, account, planned_at, started_at, completed_at, status FROM collector_schedule WHERE day=?`, day)
 	if err != nil {
 		return nil, err
 	}
-	s.PlannedAt, _ = time.Parse(time.RFC3339, planned)
-	if started != "" {
-		s.StartedAt, _ = time.Parse(time.RFC3339, started)
+	defer rows.Close()
+	var out []*CollectorSchedule
+	for rows.Next() {
+		s := &CollectorSchedule{}
+		var planned, started, completed string
+		if err := rows.Scan(&s.Day, &s.Account, &planned, &started, &completed, &s.Status); err != nil {
+			return nil, err
+		}
+		s.PlannedAt, _ = time.Parse(time.RFC3339, planned)
+		if started != "" {
+			s.StartedAt, _ = time.Parse(time.RFC3339, started)
+		}
+		if completed != "" {
+			s.CompletedAt, _ = time.Parse(time.RFC3339, completed)
+		}
+		out = append(out, s)
 	}
-	if completed != "" {
-		s.CompletedAt, _ = time.Parse(time.RFC3339, completed)
-	}
-	return &s, nil
+	return out, rows.Err()
 }
 
-// SaveCollectorSchedule 保存每日归集计划。
+// SaveCollectorSchedule 保存某个小号当天的归集计划。
 func (d *DB) SaveCollectorSchedule(s *CollectorSchedule) error {
-	_, err := d.Exec(`INSERT INTO collector_schedule(day, planned_at, started_at, completed_at, status)
-		VALUES(?,?,?,?,?) ON CONFLICT(day) DO UPDATE SET planned_at=excluded.planned_at, started_at=excluded.started_at, completed_at=excluded.completed_at, status=excluded.status`,
-		s.Day, s.PlannedAt.UTC().Format(time.RFC3339), formatTime(s.StartedAt), formatTime(s.CompletedAt), s.Status)
+	_, err := d.Exec(`INSERT INTO collector_schedule(day, account, planned_at, started_at, completed_at, status)
+		VALUES(?,?,?,?,?,?) ON CONFLICT(day, account) DO UPDATE SET planned_at=excluded.planned_at, started_at=excluded.started_at, completed_at=excluded.completed_at, status=excluded.status`,
+		s.Day, s.Account, s.PlannedAt.UTC().Format(time.RFC3339), formatTime(s.StartedAt), formatTime(s.CompletedAt), s.Status)
 	return err
 }
 
-// DeleteCollectorSchedule 删除尚未执行的每日计划，用于配置变更重算。
-func (d *DB) DeleteCollectorSchedule(day string) error {
+// DeleteCollectorSchedules 删除当天尚未执行的计划，用于配置变更重算。
+func (d *DB) DeleteCollectorSchedules(day string) error {
 	_, err := d.Exec(`DELETE FROM collector_schedule WHERE day=? AND status='planned'`, day)
 	return err
 }
@@ -313,4 +325,72 @@ func (d *DB) LotteryReplyPendingRecently(accountID, topicID int, since time.Time
 	err := d.QueryRow(`SELECT COUNT(*) FROM lottery_replies WHERE account_id=? AND topic_id=? AND submitted=1 AND confirmed=0 AND dry_run=0 AND time>=?`,
 		accountID, topicID, since.UTC().Format(time.RFC3339)).Scan(&n)
 	return err == nil && n > 0
+}
+
+// GachaDrawRow gacha_draws 表存储模型：某账号某天每日免费一抽的结果。
+type GachaDrawRow struct {
+	ID         int64     `json:"-"`
+	Day        string    `json:"day"`
+	Time       time.Time `json:"time"`
+	AccountID  int       `json:"-"`
+	Sub        string    `json:"sub"`   // 已脱敏
+	Drawn      string    `json:"drawn"` // 抽到的称号名；空=空包/未识别
+	OK         bool      `json:"ok"`    // 今日抽卡是否已落定（不重复抽）
+	Gifted     bool      `json:"gifted"`
+	GiftTarget string    `json:"gift_target"`
+	Message    string    `json:"message"`
+}
+
+// SaveGachaDraw 按 (day, account_id) 写入或更新一条抽卡记录。
+func (d *DB) SaveGachaDraw(r *GachaDrawRow) error {
+	_, err := d.Exec(`INSERT INTO gacha_draws(day, time, account_id, sub, drawn, ok, gifted, gift_target, message)
+		VALUES(?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(day, account_id) DO UPDATE SET
+			time=excluded.time, sub=excluded.sub, drawn=excluded.drawn, ok=excluded.ok,
+			gifted=excluded.gifted, gift_target=excluded.gift_target, message=excluded.message`,
+		r.Day, r.Time.UTC().Format(time.RFC3339), r.AccountID, r.Sub, r.Drawn,
+		b2i(r.OK), b2i(r.Gifted), r.GiftTarget, r.Message)
+	return err
+}
+
+// GetGachaDraw 读取某账号某天的抽卡记录；不存在时返回 (nil, nil)。
+func (d *DB) GetGachaDraw(day string, accountID int) (*GachaDrawRow, error) {
+	r := &GachaDrawRow{}
+	var ts string
+	var ok, gifted int
+	err := d.QueryRow(`SELECT id, day, time, account_id, sub, drawn, ok, gifted, gift_target, message
+		FROM gacha_draws WHERE day=? AND account_id=?`, day, accountID).
+		Scan(&r.ID, &r.Day, &ts, &r.AccountID, &r.Sub, &r.Drawn, &ok, &gifted, &r.GiftTarget, &r.Message)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	r.Time, _ = time.Parse(time.RFC3339, ts)
+	r.OK, r.Gifted = ok != 0, gifted != 0
+	return r, nil
+}
+
+// ListGachaDraws 新→旧返回最近抽卡记录。
+func (d *DB) ListGachaDraws(limit int) ([]*GachaDrawRow, error) {
+	rows, err := d.Query(`SELECT id, day, time, account_id, sub, drawn, ok, gifted, gift_target, message
+		FROM gacha_draws ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*GachaDrawRow, 0)
+	for rows.Next() {
+		r := &GachaDrawRow{}
+		var ts string
+		var ok, gifted int
+		if err := rows.Scan(&r.ID, &r.Day, &ts, &r.AccountID, &r.Sub, &r.Drawn, &ok, &gifted, &r.GiftTarget, &r.Message); err != nil {
+			return nil, err
+		}
+		r.Time, _ = time.Parse(time.RFC3339, ts)
+		r.OK, r.Gifted = ok != 0, gifted != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

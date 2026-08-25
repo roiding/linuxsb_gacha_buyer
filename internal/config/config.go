@@ -128,12 +128,10 @@ type SubAccount struct {
 
 // Collector 归集任务配置。
 type Collector struct {
-	TopicID         int    `json:"topic_id"` // 0 = 每日随机挑主号帖子
-	Keep            int    `json:"keep"`
-	AtHour          int    `json:"at_hour"`
-	RandomWindowMin int    `json:"random_window_min"`
-	Message         string `json:"message"`
-	MinTip          int    `json:"min_tip"`
+	TopicID int    `json:"topic_id"` // 0 = 每日随机挑主号帖子
+	Keep    int    `json:"keep"`
+	Message string `json:"message"`
+	MinTip  int    `json:"min_tip"`
 }
 
 // Config 完整运行配置（内存态，由 db 加载/保存）。
@@ -164,7 +162,7 @@ func Defaults() Config {
 		MinBalance: 0,
 		DryRun:     true,
 		ScanSec:    60,
-		Collector:  Collector{Keep: 5, AtHour: 9, RandomWindowMin: 60, MinTip: 1},
+		Collector:  Collector{Keep: 5, MinTip: 1},
 		Lottery:    LotteryReplyConfig{Messages: DefaultLotteryMessages()},
 		Listen:     "127.0.0.1:8080",
 	}
@@ -194,12 +192,6 @@ func (c *Config) Normalize() {
 	}
 	if c.Collector.Keep < 0 {
 		c.Collector.Keep = 0
-	}
-	if c.Collector.AtHour < 0 || c.Collector.AtHour > 23 {
-		c.Collector.AtHour = 9
-	}
-	if c.Collector.RandomWindowMin < 1 || c.Collector.RandomWindowMin > 720 {
-		c.Collector.RandomWindowMin = 60
 	}
 	if c.Collector.MinTip < 1 {
 		c.Collector.MinTip = 1

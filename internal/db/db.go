@@ -89,11 +89,13 @@ func migrate(d *sql.DB) error {
 				message       TEXT NOT NULL DEFAULT ''
 			)`,
 		`CREATE TABLE IF NOT EXISTS collector_schedule (
-				day          TEXT PRIMARY KEY,
+				day          TEXT NOT NULL,
+				account      TEXT NOT NULL,
 				planned_at   TEXT NOT NULL,
 				started_at   TEXT NOT NULL DEFAULT '',
 				completed_at TEXT NOT NULL DEFAULT '',
-				status       TEXT NOT NULL DEFAULT 'planned'
+				status       TEXT NOT NULL DEFAULT 'planned',
+				PRIMARY KEY (day, account)
 			)`,
 		`CREATE TABLE IF NOT EXISTS lottery_replies (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,10 +111,43 @@ func migrate(d *sql.DB) error {
 			reply_id    INTEGER NOT NULL DEFAULT 0,
 			message     TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS gacha_draws (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			day         TEXT NOT NULL,
+			time        TEXT NOT NULL,
+			account_id  INTEGER NOT NULL DEFAULT 0,
+			sub         TEXT NOT NULL DEFAULT '',
+			drawn       TEXT NOT NULL DEFAULT '',
+			ok          INTEGER NOT NULL DEFAULT 0,
+			gifted      INTEGER NOT NULL DEFAULT 0,
+			gift_target TEXT NOT NULL DEFAULT '',
+			message     TEXT NOT NULL DEFAULT '',
+			UNIQUE(day, account_id)
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.Exec(s); err != nil {
 			return fmt.Errorf("迁移失败: %w", err)
+		}
+	}
+	// collector_schedule 旧版按 day 一行存单个计划点；新版按 day+account 一行。
+	// 计划属于临时数据，检测到旧结构直接重建，次日/重启会自动重新生成。
+	if ok, err := hasColumn(d, "collector_schedule", "account"); err != nil {
+		return err
+	} else if !ok {
+		if _, err := d.Exec(`DROP TABLE collector_schedule`); err != nil {
+			return fmt.Errorf("迁移 collector_schedule 失败: %w", err)
+		}
+		if _, err := d.Exec(`CREATE TABLE collector_schedule (
+			day          TEXT NOT NULL,
+			account      TEXT NOT NULL,
+			planned_at   TEXT NOT NULL,
+			started_at   TEXT NOT NULL DEFAULT '',
+			completed_at TEXT NOT NULL DEFAULT '',
+			status       TEXT NOT NULL DEFAULT 'planned',
+			PRIMARY KEY (day, account)
+		)`); err != nil {
+			return fmt.Errorf("重建 collector_schedule 失败: %w", err)
 		}
 	}
 	if ok, err := hasColumn(d, "purchases", "submitted"); err != nil {

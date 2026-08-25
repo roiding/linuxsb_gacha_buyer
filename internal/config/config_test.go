@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -31,5 +32,27 @@ func TestNormalizeTopicURLAndDefaultMessages(t *testing.T) {
 			t.Fatalf("默认语料无效或重复: %q", msg)
 		}
 		seen[msg] = true
+	}
+}
+
+func TestCollectorDefaultsAndNormalizeWithoutWindowFields(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Collector.Keep != 5 || cfg.Collector.MinTip != 1 {
+		t.Fatalf("默认归集配置错误: %+v", cfg.Collector)
+	}
+	cfg.Collector.Keep = -3
+	cfg.Collector.MinTip = 0
+	cfg.Normalize()
+	if cfg.Collector.Keep != 0 || cfg.Collector.MinTip != 1 {
+		t.Fatalf("Normalize 纠错失败: %+v", cfg.Collector)
+	}
+	// 旧配置里残留的窗口字段应被 JSON 解析忽略。
+	raw := `{"collector":{"topic_id":3,"keep":5,"at_hour":9,"random_window_min":60,"message":"x","min_tip":2}}`
+	var c Config
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Collector.TopicID != 3 || c.Collector.MinTip != 2 || c.Collector.Message != "x" {
+		t.Fatalf("其余字段应正常解析: %+v", c.Collector)
 	}
 }

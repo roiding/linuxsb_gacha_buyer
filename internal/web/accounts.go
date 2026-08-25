@@ -14,11 +14,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
 			"accounts": s.mgr.Snapshot(),
 			"collector": map[string]any{
-				"topic_id":          s.cfg.Collector.TopicID,
-				"keep":              s.cfg.Collector.Keep,
-				"at_hour":           s.cfg.Collector.AtHour,
-				"random_window_min": s.cfg.Collector.RandomWindowMin,
-				"message":           s.cfg.Collector.Message,
+				"topic_id": s.cfg.Collector.TopicID,
+				"keep":     s.cfg.Collector.Keep,
+				"message":  s.cfg.Collector.Message,
+				"min_tip":  s.cfg.Collector.MinTip,
 			},
 		})
 
@@ -30,11 +29,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			ID           int                `json:"id,omitempty"`
 			Sub          *config.SubAccount `json:"sub,omitempty"`
 			Collector    *struct {
-				TopicID         int    `json:"topic_id"`
-				Keep            int    `json:"keep"`
-				AtHour          int    `json:"at_hour"`
-				RandomWindowMin int    `json:"random_window_min"`
-				Message         string `json:"message"`
+				TopicID int    `json:"topic_id"`
+				Keep    int    `json:"keep"`
+				Message string `json:"message"`
+				MinTip  int    `json:"min_tip"`
 			} `json:"collector,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -65,10 +63,8 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		if in.Collector != nil {
 			s.cfg.Collector.TopicID = in.Collector.TopicID
 			s.cfg.Collector.Keep = in.Collector.Keep
-			s.cfg.Collector.AtHour = in.Collector.AtHour
-			s.cfg.Collector.RandomWindowMin = in.Collector.RandomWindowMin
 			s.cfg.Collector.Message = in.Collector.Message
-
+			s.cfg.Collector.MinTip = in.Collector.MinTip
 		}
 
 		switch in.Action {
@@ -182,9 +178,14 @@ func (s *Server) handlePatrolOnce(w http.ResponseWriter, r *http.Request) {
 
 // handleTransfers GET 归集记录。
 func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
+	gacha, err := s.d.ListGachaDraws(100)
+	if err != nil {
+		gacha = nil
+	}
 	writeJSON(w, map[string]any{
 		"transfers": s.col.Transfers(),
 		"status":    s.col.Snapshot(),
+		"gacha":     gacha,
 	})
 }
 
