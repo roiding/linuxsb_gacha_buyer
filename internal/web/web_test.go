@@ -172,3 +172,35 @@ func TestMarketPublishCancelRoutes(t *testing.T) {
 		t.Fatalf("未配主号时应返回 1 条失败提示: %+v", can)
 	}
 }
+
+func TestConfigTargetsRoundTrip(t *testing.T) {
+	s, cfg := newTestServer(t)
+
+	// POST 保存定向规则
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/config",
+		bytes.NewBufferString(`{"targets":{"论坛之星":{"price":88,"max":3},"路人甲":{"price":0,"max":5}}}`)))
+	if rec.Code != 200 {
+		t.Fatalf("POST /api/config targets: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// GET 读回
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/config", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /api/config: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Targets map[string]config.TargetRule `json:"targets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Targets["论坛之星"].Price != 88 || out.Targets["论坛之星"].Max != 3 {
+		t.Fatalf("定向规则保存/读取错误: %+v", out.Targets)
+	}
+	if out.Targets["路人甲"].Max != 5 {
+		t.Fatalf("仅限数量的规则应保留: %+v", out.Targets)
+	}
+	_ = cfg
+}

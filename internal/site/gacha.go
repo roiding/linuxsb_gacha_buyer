@@ -133,6 +133,24 @@ type ProfileTitle struct {
 	Equipped bool   // 是否正在佩戴
 }
 
+// FetchOwnedTitles 抓取 /gacha_profile 的全部称号持有数（名称 → 数量）。
+// 同名称号的持有数会累加（多张卡均计入背包数量）。
+func (c *Client) FetchOwnedTitles() (map[string]int, error) {
+	status, body, err := c.get(gachaProfilePath)
+	if err != nil {
+		return nil, fmt.Errorf("打开我的称号页失败: %w", err)
+	}
+	page := string(body)
+	if status != http.StatusOK || isLoginPage(page) {
+		return nil, fmt.Errorf("我的称号页不可用（HTTP %d 或需登录）", status)
+	}
+	owned := make(map[string]int)
+	for _, t := range parseProfileTitles(page) {
+		owned[t.Name] += t.Count
+	}
+	return owned, nil
+}
+
 // GiftTitle 把本账号已拥有的 titleName 赠送 1 张给 target 用户。
 // 只操作名称完全匹配的称号；可赠送数 = 总数 − 佩戴中的 1 张，不足 1 张不赠送。
 // title_id 从 /gacha_profile 对应卡片的赠送按钮解析。

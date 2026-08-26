@@ -21,7 +21,7 @@ const indexHTML = `<!doctype html>
       <button data-tab="accounts"><span>◎</span>账号管理</button>
       <button data-tab="transfers"><span>↗</span>归集记录</button>
       <button data-tab="settings"><span>⚙</span>采购设置</button>
-      <button data-tab="ssr"><span>✦</span>SSR定向</button>
+      <button data-tab="ssr"><span>✦</span>定向收购</button>
       <button data-tab="lottery"><span>✎</span>抽奖回复</button>
     </nav>
     <div class="sidebar-note"><span class="status-dot"></span><div><b>本机运行</b><small>数据仅存于 SQLite</small></div></div>
@@ -187,9 +187,26 @@ const indexHTML = `<!doctype html>
       </section>
 
       <section id="tab-ssr" class="tab">
-        <div class="section-head"><div><p class="eyebrow">TARGETED COLLECTION</p><h2>SSR 定向收集</h2><p class="hint">从 linux.sb 称号目录读取全部 SSR；逐个填写最高收购价，留空表示不收购。</p></div><button id="btn-load-catalog" class="primary">刷新 SSR 目录</button></div>
-        <div class="panel"><div id="ssr-catalog" class="ssr-grid"><p class="empty">点击“刷新 SSR 目录”获取称号列表。</p></div><div class="settings-actions"><button id="btn-save-ssr" class="primary">保存 SSR 价格</button><span id="ssr-save-msg"></span></div></div>
-      </section>
+          <div class="section-head"><div><p class="eyebrow">TARGETED COLLECTION</p><h2>定向收购</h2><p class="hint">按名称指定单卡收购：填价格上限才收，“背包上限”为该称号最大持有数（超过即停止收购，留空不限量）。仅设价格的旧 SSR 配置仍生效。</p></div><button id="btn-load-catalog" class="primary">刷新称号目录</button></div>
+          <div class="panel">
+            <div class="target-filters">
+              <div class="target-rarity-group" id="target-rarity-group">
+                <button type="button" class="active" data-rarity="">全部</button>
+                <button type="button" data-rarity="n">N</button>
+                <button type="button" data-rarity="r">R</button>
+                <button type="button" data-rarity="sr">SR</button>
+                <button type="button" data-rarity="ssr">SSR</button>
+                <button type="button" data-rarity="ur">UR</button>
+              </div>
+              <input id="target-search" type="search" placeholder="搜索称号名称…" class="target-search">
+            </div>
+            <div class="table-wrap"><table id="target-table">
+              <thead><tr><th>称号</th><th>稀有度</th><th>价格上限</th><th>背包上限</th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+            <div class="settings-actions"><button id="btn-save-targets" class="primary">保存定向收购</button><span id="target-save-msg"></span></div>
+          </div>
+        </section>
       <section id="tab-lottery" class="tab">
         <div class="section-head"><div><p class="eyebrow">LOTTERY REPLIES</p><h2>抽奖帖小号回复</h2><p class="hint">保存目标帖子和回复语料后，由全部已启用小号依次随机回复；只有点击“立即执行”才会发帖。</p></div><button id="btn-lottery-run" class="primary">立即执行全部小号</button></div>
         <div class="panel lottery-panel">

@@ -300,3 +300,31 @@ func TestGiftTitleToastErrorDetected(t *testing.T) {
 		t.Fatalf("错误消息应包含 toast 内容: %s", res.Message)
 	}
 }
+
+func TestFetchOwnedTitles(t *testing.T) {
+	const profilePage = `<form method="post" action="/search">...</form>
+		<div class="gacha-profile-item">
+			<span class="gacha-title-name">潜水员</span><span class="gacha-status-tag">× 2</span>
+		</div>
+		<div class="gacha-profile-item">
+			<span class="gacha-title-name">键盘侠</span><span class="gacha-status-tag">× 1</span>
+		</div>
+		<div class="gacha-profile-item is-equipped">
+			<span class="gacha-title-name">常客</span><span class="gacha-status-tag">× 3</span><span class="gacha-equipped-label">已装备</span>
+		</div>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, profilePage)
+	}))
+	defer server.Close()
+
+	cfg := config.Defaults()
+	cfg.Site = server.URL
+	client, _ := NewClient(&cfg, nil)
+	owned, err := client.FetchOwnedTitles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned["潜水员"] != 2 || owned["键盘侠"] != 1 || owned["常客"] != 3 {
+		t.Fatalf("持有数解析错误: %+v", owned)
+	}
+}

@@ -1,6 +1,8 @@
 package buyer
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -96,6 +98,46 @@ func TestActiveRarities(t *testing.T) {
 	}
 }
 
+func TestRaritiesWithTargets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`
+			<div class="gacha-all-item"><span class="gacha-title-badge gacha-title-n">
+				<span class="gacha-title-name">潜水员</span></span></div>
+			<div class="gacha-all-item"><span class="gacha-title-badge gacha-title-r">
+				<span class="gacha-title-name">话题王</span></span></div>
+			<div class="gacha-all-item"><span class="gacha-title-badge gacha-title-ur">
+				<span class="gacha-title-name">UR卡</span></span></div>`))
+	}))
+	defer server.Close()
+
+	cfg := config.Defaults()
+	cfg.Rules = config.PriceRules{N: 4} // 仅启用 N；R 和 UR 类型限价为 0
+	cfg.Site = server.URL
+	sc, err := site.NewClient(&cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := mkEngine(t, cfg.Rules)
+	e.cfg = &cfg
+	// 定向"话题王"(R) 和 "UR卡"(UR)，类型限价虽为 0 也应补入扫描分类
+	cfg.Targets = map[string]config.TargetRule{
+		"话题王": {Price: 10, Max: 2},
+		"UR卡": {Price: 5, Max: 1},
+	}
+	base := activeRarities(&cfg) // [N]
+	got := e.raritiesWithTargets(sc, base, &cfg)
+	if len(got) != 3 {
+		t.Fatalf("应补入 R 和 UR: got=%v", got)
+	}
+	want := []market.Rarity{market.N, market.R, market.UR}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("分类顺序错误: got=%v want=%v", got, want)
+		}
+	}
+}
+
 func TestPublishCandidates(t *testing.T) {
 	catalog := []market.Title{
 		{Name: "欧皇", Rarity: market.SSR},
@@ -122,5 +164,58 @@ func TestPublishCandidates(t *testing.T) {
 	}
 	if got[1].Name != "论坛之星" {
 		t.Fatalf("论坛之星候选错误: %+v", got[1])
+	}
+}
+
+func TestLimitForTargetPriority(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Rules = config.PriceRules{N: 4, R: 10, SR: 30, UR: 0}
+	cfg.SSRPrices = map[string]int{"欧皇": 200, "氪金大佬": 200}
+	cfg.Targets = map[string]config.TargetRule{
+		"论坛之星": {Price: 88, Max: 3}, // 定向覆盖 R 类限价 10
+		"万人迷":  {Price: 66, Max: 0}, // 只限价不限数量
+		"欧皇":   {Price: 5, Max: 1},  // 定向覆盖 SSR 价格 200
+	}
+	cases := []struct {
+		listing market.Listing
+		want    int
+	}{
+		{market.Listing{Name: "论坛之星", Rarity: market.R}, 88},
+		{market.Listing{Name: "万人迷", Rarity: market.SR}, 66},
+		{market.Listing{Name: "欧皇", Rarity: market.SSR}, 5},
+		{market.Listing{Name: "夜猫子", Rarity: market.R}, 10},
+		{market.Listing{Name: "潜水员", Rarity: market.N}, 4},
+		{market.Listing{Name: "氪金大佬", Rarity: market.SSR}, 200}, // 未定向走 SSR 价格
+		{market.Listing{Name: "UR卡", Rarity: market.UR}, 0},
+	}
+	for _, c := range cases {
+		if got := limitFor(&cfg, c.listing); got != c.want {
+			t.Fatalf("limitFor(%s/%s)=%d want %d", c.listing.Name, c.listing.Rarity, got, c.want)
+		}
+	}
+}
+
+func TestBuyQtyLimited(t *testing.T) {
+	cases := []struct {
+		name     string
+		remain   int
+		maxOwned int
+		held     int
+		wantQty  int
+		wantSkip bool
+	}{
+		{"不限数量", 5, 0, 99, 5, false},
+		{"已满则跳过", 10, 3, 3, 0, true},
+		{"超出上限也跳过", 10, 3, 5, 0, true},
+		{"补到上限", 10, 3, 1, 2, false},
+		{"余量不足", 5, 10, 8, 2, false},
+		{"余量为零", 0, 10, 2, 0, false},
+	}
+	for _, c := range cases {
+		qty, skip := buyQtyLimited(c.remain, c.maxOwned, c.held)
+		if qty != c.wantQty || skip != c.wantSkip {
+			t.Fatalf("%s: buyQtyLimited(%d,%d,%d)=(%d,%v) want (%d,%v)",
+				c.name, c.remain, c.maxOwned, c.held, qty, skip, c.wantQty, c.wantSkip)
+		}
 	}
 }

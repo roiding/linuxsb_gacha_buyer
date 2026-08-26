@@ -16,7 +16,6 @@ import (
 	"gacha-buyer/internal/config"
 	"gacha-buyer/internal/db"
 	"gacha-buyer/internal/lottery"
-	"gacha-buyer/internal/market"
 	"gacha-buyer/internal/store"
 )
 
@@ -135,6 +134,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"site":        s.cfg.Site,
 			"rules":       s.cfg.Rules,
 			"ssr_prices":  s.cfg.SSRPrices,
+			"targets":     s.cfg.Targets,
 			"min_balance": s.cfg.MinBalance,
 			"dry_run":     s.cfg.DryRun,
 			"scan_sec":    s.cfg.ScanSec,
@@ -142,11 +142,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		})
 	case http.MethodPost:
 		var in struct {
-			Rules      *config.PriceRules `json:"rules"`
-			SSRPrices  *map[string]int    `json:"ssr_prices"`
-			MinBalance *int               `json:"min_balance"`
-			DryRun     *bool              `json:"dry_run"`
-			ScanSec    *int               `json:"scan_sec"`
+			Rules      *config.PriceRules            `json:"rules"`
+			SSRPrices  *map[string]int               `json:"ssr_prices"`
+			Targets    *map[string]config.TargetRule `json:"targets"`
+			MinBalance *int                          `json:"min_balance"`
+			DryRun     *bool                         `json:"dry_run"`
+			ScanSec    *int                          `json:"scan_sec"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -158,6 +159,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.SSRPrices != nil {
 			s.cfg.SSRPrices = *in.SSRPrices
+		}
+		if in.Targets != nil {
+			s.cfg.Targets = *in.Targets
 		}
 		if in.MinBalance != nil && *in.MinBalance >= 0 {
 			s.cfg.MinBalance = *in.MinBalance
@@ -201,13 +205,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	ssr := make([]market.Title, 0)
-	for _, t := range titles {
-		if t.Rarity == market.SSR {
-			ssr = append(ssr, t)
-		}
-	}
-	writeJSON(w, map[string]any{"titles": ssr, "prices": s.cfg.SSRPrices})
+	writeJSON(w, map[string]any{"titles": titles, "targets": s.cfg.Targets})
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {

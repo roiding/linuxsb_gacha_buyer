@@ -56,3 +56,34 @@ func TestCollectorDefaultsAndNormalizeWithoutWindowFields(t *testing.T) {
 		t.Fatalf("其余字段应正常解析: %+v", c.Collector)
 	}
 }
+
+func TestTargetsNormalize(t *testing.T) {
+	cfg := Defaults()
+	cfg.Targets = map[string]TargetRule{
+		"欧皇":  {Price: 200, Max: 3},
+		"夜猫子": {Price: 0, Max: 0},   // 无效：价格与数量都为空
+		"路人甲": {Price: 0, Max: 5},   // 仅限制数量
+		"潜水员": {Price: 66, Max: -1}, // Max 负值纠正为 0
+		"   ": {Price: 1, Max: 1},
+		"":    {Price: 1, Max: 1},
+	}
+	cfg.Normalize()
+	if _, ok := cfg.Targets["欧皇"]; !ok {
+		t.Fatalf("欧皇应保留: %+v", cfg.Targets)
+	}
+	if _, ok := cfg.Targets["夜猫子"]; ok {
+		t.Fatalf("价格与数量都为空应删除: %+v", cfg.Targets)
+	}
+	if _, ok := cfg.Targets["路人甲"]; !ok {
+		t.Fatalf("仅限制数量应保留: %+v", cfg.Targets)
+	}
+	if r := cfg.Targets["潜水员"]; r.Max != 0 || r.Price != 66 {
+		t.Fatalf("负 Max 应纠正为 0: %+v", r)
+	}
+	if _, ok := cfg.Targets["   "]; ok {
+		t.Fatalf("纯空白名称应删除: %+v", cfg.Targets)
+	}
+	if _, ok := cfg.Targets[""]; ok {
+		t.Fatalf("空名称应删除: %+v", cfg.Targets)
+	}
+}

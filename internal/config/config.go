@@ -118,6 +118,13 @@ type PriceRules struct {
 	UR  int `json:"ur"`
 }
 
+// TargetRule 按名称定向收购规则（任意稀有度）。
+// Price 为单卡价格上限（>0 生效）；Max 为背包最大持有数（>0 生效，0 表示不限数量）。
+type TargetRule struct {
+	Price int `json:"price"`
+	Max   int `json:"max"`
+}
+
 // SubAccount 小号：负责每日签到并把积分打赏给主号帖子。
 type SubAccount struct {
 	Username string `json:"username"`
@@ -140,11 +147,12 @@ type Config struct {
 	Username string `json:"username"` // 主号
 	Password string `json:"password"`
 
-	Rules      PriceRules     `json:"rules"`
-	SSRPrices  map[string]int `json:"ssr_prices,omitempty"`
-	MinBalance int            `json:"min_balance"`
-	DryRun     bool           `json:"dry_run"`
-	ScanSec    int            `json:"scan_sec"`
+	Rules      PriceRules            `json:"rules"`
+	SSRPrices  map[string]int        `json:"ssr_prices,omitempty"`
+	Targets    map[string]TargetRule `json:"targets,omitempty"`
+	MinBalance int                   `json:"min_balance"`
+	DryRun     bool                  `json:"dry_run"`
+	ScanSec    int                   `json:"scan_sec"`
 
 	Subs      []SubAccount       `json:"subs"`
 	Collector Collector          `json:"collector"`
@@ -159,6 +167,7 @@ func Defaults() Config {
 		Site:       "https://linux.sb",
 		Rules:      PriceRules{SR: 30, R: 10, N: 4},
 		SSRPrices:  map[string]int{},
+		Targets:    map[string]TargetRule{},
 		MinBalance: 0,
 		DryRun:     true,
 		ScanSec:    60,
@@ -189,6 +198,22 @@ func (c *Config) Normalize() {
 		if strings.TrimSpace(name) == "" || price <= 0 {
 			delete(c.SSRPrices, name)
 		}
+	}
+	if c.Targets == nil {
+		c.Targets = map[string]TargetRule{}
+	}
+	for name, rule := range c.Targets {
+		if strings.TrimSpace(name) == "" || (rule.Price <= 0 && rule.Max <= 0) {
+			delete(c.Targets, name)
+			continue
+		}
+		if rule.Price < 0 {
+			rule.Price = 0
+		}
+		if rule.Max < 0 {
+			rule.Max = 0
+		}
+		c.Targets[name] = rule
 	}
 	if c.Collector.Keep < 0 {
 		c.Collector.Keep = 0

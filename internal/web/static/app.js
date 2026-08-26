@@ -56,19 +56,20 @@ async function refreshStatus() {
     const rules = s.rules || {};
     $("#rules-brief").textContent =
       `SR≤${rules.sr ?? 0} / R≤${rules.r ?? 0} / N≤${rules.n ?? 0}` +
-      `（SSR 按名称定向，UR≤${rules.ur ?? 0}），余额保护线 ${s.min_balance} 分` +
+      `（UR≤${rules.ur ?? 0}），余额保护线 ${s.min_balance} 分` +
+      (s.targets ? `，定向 ${Object.keys(s.targets).length} 条` : "") +
       (s.dry_run ? "，当前 dry-run" : "");
     const errBox = $("#err-box");
     if (s.last_error) { errBox.hidden = false; errBox.textContent = "最近错误：" + s.last_error; }
     else errBox.hidden = true;
 
-    renderMarket(s.listings || [], s.rules || {}, s.ssr_prices || {});
+    renderMarket(s.listings || [], s.rules || {}, s.ssr_prices || {}, s.targets || {});
     // 设置页 dry-run 开关同步
     $("#dry-run-toggle").checked = !!s.dry_run;
   } catch (e) { console.error(e); }
 }
 
-function renderMarket(listings, rules, ssrPrices) {
+function renderMarket(listings, rules, ssrPrices, targets) {
   const tb = $("#market-table tbody");
   tb.innerHTML = "";
   if (!listings.length) {
@@ -76,7 +77,8 @@ function renderMarket(listings, rules, ssrPrices) {
     return;
   }
   for (const l of listings) {
-    const limit = l.rarity === "ssr" ? (ssrPrices[l.name] ?? 0) : (rules[l.rarity] ?? 0);
+    const targeted = (targets && targets[l.name] && targets[l.name].price) || 0;
+    const limit = targeted || (l.rarity === "ssr" ? (ssrPrices[l.name] ?? 0) : (rules[l.rarity] ?? 0));
     const hit = limit > 0 && l.price <= limit && l.remain > 0;
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${l.emoji || ""} ${esc(l.name)}</td>
@@ -259,28 +261,49 @@ $("#cfg-form").addEventListener("submit", async (ev) => {
   } catch (e) { alert(e.message); }
 });
 
-// ---- SSR 定向收集 ----
-let ssrTitles = [];
+// ---- 定向收购 ----
+let targetTitles = [];
+let targetRules = {}; // name -> {price, max}
+
+function buildTargetRow(t) {
+  const rule = targetRules[t.name] || {};
+  const tr = document.createElement("tr");
+  tr.dataset.rarity = t.rarity || "";
+  tr.dataset.name = t.name;
+  tr.innerHTML = `
+    <td class="target-title">${esc(t.emoji || "")} ${esc(t.name)}</td>
+    <td>${rarityBadge(t.rarity)}</td>
+    <td><input class="num target-price" type="number" min="0" value="${rule.price || ""}" placeholder="不收"></td>
+    <td><input class="num target-max" type="number" min="0" value="${rule.max || ""}" placeholder="不限"></td>`;
+  return tr;
+}
+
+function applyTargetFilter() {
+  const rarity = $("#target-rarity-group .active").dataset.rarity;
+  const q = ($("#target-search").value || "").trim().toLowerCase();
+  $$("#target-table tbody tr").forEach(tr => {
+    const matchR = !rarity || tr.dataset.rarity === rarity;
+    const matchQ = !q || (tr.dataset.name || "").toLowerCase().includes(q);
+    tr.style.display = (matchR && matchQ) ? "" : "none";
+  });
+}
+
 async function loadCatalog() {
-  const box = $("#ssr-catalog");
-  box.innerHTML = `<p class="hint">正在读取 linux.sb 称号目录…</p>`;
+  const tb = $("#target-table tbody");
+  tb.innerHTML = `<tr><td colspan="4" class="empty">正在读取 linux.sb 称号目录…</td></tr>`;
   try {
     const d = await api("/api/catalog");
-    ssrTitles = d.titles || [];
-    const prices = d.prices || {};
-    box.innerHTML = "";
-    if (!ssrTitles.length) {
-      box.innerHTML = `<p class="empty">目录中没有发现 SSR。</p>`;
+    targetTitles = d.titles || [];
+    targetRules = d.targets || {};
+    tb.innerHTML = "";
+    if (!targetTitles.length) {
+      tb.innerHTML = `<tr><td colspan="4" class="empty">目录中没有发现称号。</td></tr>`;
       return;
     }
-    for (const t of ssrTitles) {
-      const label = document.createElement("label");
-      label.className = "ssr-card";
-      label.innerHTML = `<span class="ssr-title"><b>${esc(t.emoji || "")}</b> ${esc(t.name)}</span><span class="ssr-rarity">SSR</span><input class="num" type="number" min="1" data-ssr-name="${esc(t.name)}" value="${prices[t.name] || ""}" placeholder="不收购">`;
-      box.appendChild(label);
-    }
+    for (const t of targetTitles) tb.appendChild(buildTargetRow(t));
+    applyTargetFilter();
   } catch (e) {
-    box.innerHTML = `<p class="fail">${esc(e.message)}</p>`;
+    tb.innerHTML = `<tr><td colspan="4" class="fail">${esc(e.message)}</td></tr>`;
   }
 }
 
@@ -288,18 +311,29 @@ $("#btn-load-catalog").addEventListener("click", async (ev) => {
   try { await withBusy(ev.currentTarget, loadCatalog); }
   catch (e) { notify(e.message, true); }
 });
-$("#btn-save-ssr").addEventListener("click", async (ev) => {
-  const prices = {};
-  $("#ssr-catalog").querySelectorAll("[data-ssr-name]").forEach(input => {
-    const n = Number(input.value);
-    if (n > 0) prices[input.dataset.ssrName] = n;
+$("#target-rarity-group").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button");
+  if (!btn) return;
+  $$("#target-rarity-group button").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  applyTargetFilter();
+});
+$("#target-search").addEventListener("input", applyTargetFilter);
+$("#btn-save-targets").addEventListener("click", async (ev) => {
+  const targets = {};
+  $$("#target-table tbody tr").forEach(tr => {
+    const name = tr.dataset.name;
+    if (!name) return;
+    const price = Number(tr.querySelector(".target-price").value) || 0;
+    const max = Number(tr.querySelector(".target-max").value) || 0;
+    if (price > 0 || max > 0) targets[name] = { price, max };
   });
   try {
-    await withBusy(ev.currentTarget, () => api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ssr_prices: prices }) }));
-    $("#ssr-save-msg").textContent = "已保存 ✓";
-    notify("SSR 定向价格已保存");
+    await withBusy(ev.currentTarget, () => api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targets }) }));
+    $("#target-save-msg").textContent = "已保存 ✓";
+    notify(`定向收购已保存（${Object.keys(targets).length} 条规则）`);
     refreshStatus();
-    setTimeout(() => $("#ssr-save-msg").textContent = "", 2500);
+    setTimeout(() => $("#target-save-msg").textContent = "", 2500);
   } catch (e) { notify(e.message, true); }
 });
 

@@ -39,6 +39,10 @@ type Engine struct {
 	// 避免两个流程并发对同一挂牌下单。
 	scanMu sync.Mutex
 
+	// owned 背包持有数缓存（称号名 → 数量），配合定向收购的 Max 限制使用；
+	// 每轮扫描开始时从 /gacha_profile 刷新。
+	owned map[string]int
+
 	client *site.Client
 }
 
@@ -130,18 +134,19 @@ func (e *Engine) loop() {
 
 // Status 给 Web 展示的运行状态。
 type Status struct {
-	Running    bool              `json:"running"`
-	LoggedIn   bool              `json:"logged_in"`
-	DryRun     bool              `json:"dry_run"`
-	Points     int               `json:"points"`
-	MinBalance int               `json:"min_balance"`
-	ScanCount  int               `json:"scan_count"`
-	BuyOK      int               `json:"buy_ok"`
-	LastScanAt string            `json:"last_scan_at"`
-	LastError  string            `json:"last_error"`
-	Listings   []market.Listing  `json:"listings"`
-	Rules      config.PriceRules `json:"rules"`
-	SSRPrices  map[string]int    `json:"ssr_prices"`
+	Running    bool                         `json:"running"`
+	LoggedIn   bool                         `json:"logged_in"`
+	DryRun     bool                         `json:"dry_run"`
+	Points     int                          `json:"points"`
+	MinBalance int                          `json:"min_balance"`
+	ScanCount  int                          `json:"scan_count"`
+	BuyOK      int                          `json:"buy_ok"`
+	LastScanAt string                       `json:"last_scan_at"`
+	LastError  string                       `json:"last_error"`
+	Listings   []market.Listing             `json:"listings"`
+	Rules      config.PriceRules            `json:"rules"`
+	SSRPrices  map[string]int               `json:"ssr_prices"`
+	Targets    map[string]config.TargetRule `json:"targets"`
 }
 
 // Snapshot 返回当前状态（不触发网络）。
@@ -158,6 +163,7 @@ func (e *Engine) Snapshot() Status {
 		Listings:   e.listings,
 		Rules:      e.cfg.Rules,
 		SSRPrices:  e.cfg.SSRPrices,
+		Targets:    e.cfg.Targets,
 		LastError:  e.lastErr,
 	}
 	if !e.lastScanAt.IsZero() {
@@ -213,6 +219,8 @@ func (e *Engine) scanOnce() {
 		e.loggedIn = true
 		e.mu.Unlock()
 	}
+	// 刷新背包持有数缓存（仅当存在带数量上限的定向规则）
+	e.refreshOwned(client)
 
 	matches := e.match(listings)
 	if len(matches) == 0 {
@@ -248,10 +256,12 @@ func (e *Engine) deepScan() {
 	client := e.client
 	e.mu.Unlock()
 	rarities := activeRarities(&cfg)
+	rarities = e.raritiesWithTargets(client, rarities, &cfg)
 	if len(rarities) == 0 {
 		e.logf("深度收购：没有启用任何采购分类，跳过")
 		return
 	}
+	e.refreshOwned(client)
 	for _, r := range rarities {
 		select {
 		case <-e.stopped():
@@ -299,6 +309,37 @@ func activeRarities(cfg *config.Config) []market.Rarity {
 		out = append(out, market.SSR)
 	}
 	return out
+}
+
+// raritiesWithTargets 在 activeRarities 基础上，补充定向规则涉及的稀有度分类：
+// 即使该类型的限价为 0（类型收购关闭），只要存在定向单卡规则也会扫描该分类，
+// 保证"只收某张卡"时深度收购仍能覆盖。
+func (e *Engine) raritiesWithTargets(client *site.Client, base []market.Rarity, cfg *config.Config) []market.Rarity {
+	if len(cfg.Targets) == 0 {
+		return base
+	}
+	catalog, err := client.FetchTitleCatalog()
+	if err != nil {
+		e.logf("补充定向分类失败（读称号目录）: %v", err)
+		return base
+	}
+	rarityOf := make(map[string]market.Rarity, len(catalog))
+	for _, t := range catalog {
+		rarityOf[t.Name] = t.Rarity
+	}
+	seen := make(map[market.Rarity]bool, len(base))
+	for _, r := range base {
+		seen[r] = true
+	}
+	for name := range cfg.Targets {
+		r, ok := rarityOf[name]
+		if !ok || seen[r] {
+			continue
+		}
+		seen[r] = true
+		base = append(base, r)
+	}
+	return base
 }
 
 func (e *Engine) stopped() <-chan struct{} {
@@ -477,6 +518,9 @@ func (e *Engine) match(all []market.Listing) []market.Listing {
 }
 
 func limitFor(cfg *config.Config, l market.Listing) int {
+	if t, ok := cfg.Targets[l.Name]; ok && t.Price > 0 {
+		return t.Price
+	}
 	if l.Rarity == market.SSR {
 		return cfg.SSRPrices[l.Name]
 	}
@@ -493,9 +537,78 @@ func limitFor(cfg *config.Config, l market.Listing) int {
 	return 0
 }
 
-// buyOne 执行一次购买并记录。
+// maxOwnedFor 定向规则允许的背包最大持有数；未配置或 Max<=0 返回 0（不限数量）。
+func maxOwnedFor(cfg *config.Config, name string) int {
+	if t, ok := cfg.Targets[name]; ok {
+		return t.Max
+	}
+	return 0
+}
+
+// refreshOwned 刷新背包持有数缓存（仅当存在带数量上限的定向规则时抓取）。
+// 抓取失败只记日志，不阻断扫描；缓存保持上一轮的值。
+func (e *Engine) refreshOwned(client *site.Client) {
+	cfg := *e.cfg
+	need := false
+	for _, t := range cfg.Targets {
+		if t.Max > 0 {
+			need = true
+			break
+		}
+	}
+	if !need {
+		return
+	}
+	owned, err := client.FetchOwnedTitles()
+	if err != nil {
+		e.logf("刷新背包持有数失败: %v", err)
+		return
+	}
+	e.mu.Lock()
+	e.owned = owned
+	e.mu.Unlock()
+}
+
+// ownedCount 返回缓存中的背包持有数（未缓存时 0）。
+func (e *Engine) ownedCount(name string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.owned[name]
+}
+
+// addOwned 购买确认成交后增加缓存持有数，避免同轮多个挂牌超收。
+func (e *Engine) addOwned(name string, qty int) {
+	if qty <= 0 {
+		return
+	}
+	e.mu.Lock()
+	e.owned[name] += qty
+	e.mu.Unlock()
+}
+
+// buyQtyLimited 计算实际可购数量。maxOwned<=0 表示不限数量（沿用现有行为）；
+// 否则按背包最大持有数扣减：已持有 >= maxOwned 则跳过，否则最多补到 maxOwned。
+func buyQtyLimited(remain, maxOwned, held int) (qty int, skip bool) {
+	if maxOwned <= 0 {
+		return remain, false
+	}
+	if held >= maxOwned {
+		return 0, true
+	}
+	want := maxOwned - held
+	if remain < want {
+		want = remain
+	}
+	return want, false
+}
+
+// buyOne 执行一次购买并记录。受定向规则数量限制（Max）约束。
 func (e *Engine) buyOne(client *site.Client, l market.Listing) {
-	qty := l.Remain
+	cfg := *e.cfg
+	qty, skip := buyQtyLimited(l.Remain, maxOwnedFor(&cfg, l.Name), e.ownedCount(l.Name))
+	if skip {
+		return
+	}
 	cost := qty * l.Price
 
 	dup := e.st.LastAttemptAt(l.ListingID)
@@ -553,6 +666,7 @@ func (e *Engine) buyOne(client *site.Client, l market.Listing) {
 		e.logf("记录落盘失败: %v", err)
 	}
 	if res.OK && !dryRun {
+		e.addOwned(l.Name, actualQty)
 		e.mu.Lock()
 		e.buyCount++
 		e.mu.Unlock()
