@@ -51,7 +51,7 @@ func New(cfg *config.Config, st *store.Store, logf func(string, ...any)) *Engine
 	if logf == nil {
 		logf = log.Printf
 	}
-	return &Engine{cfg: cfg, st: st, logf: logf}
+	return &Engine{cfg: cfg, st: st, logf: logf, owned: make(map[string]int)}
 }
 
 // Running 是否在运行。
@@ -577,11 +577,16 @@ func (e *Engine) ownedCount(name string) int {
 }
 
 // addOwned 购买确认成交后增加缓存持有数，避免同轮多个挂牌超收。
+// addOwned 购买确认成交后增加缓存持有数，避免同轮多个挂牌超收。
+// owned 在 New() 中已初始化为空 map；此处再兜底一次，防止历史数据/异常路径下为 nil。
 func (e *Engine) addOwned(name string, qty int) {
 	if qty <= 0 {
 		return
 	}
 	e.mu.Lock()
+	if e.owned == nil {
+		e.owned = make(map[string]int)
+	}
 	e.owned[name] += qty
 	e.mu.Unlock()
 }

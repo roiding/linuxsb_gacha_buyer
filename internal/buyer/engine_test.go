@@ -219,3 +219,23 @@ func TestBuyQtyLimited(t *testing.T) {
 		}
 	}
 }
+
+// 回归：addOwned 在 owned 为 nil 时不应 panic（线上曾因此崩溃重启）。
+// New() 已初始化 owned；此处再模拟历史异常路径（nil）验证兜底。
+func TestAddOwnedNilMapDoesNotPanic(t *testing.T) {
+	e := mkEngine(t, config.PriceRules{})
+	e.mu.Lock()
+	e.owned = nil
+	e.mu.Unlock()
+	e.addOwned("潜水员", 2)
+	if got := e.ownedCount("潜水员"); got != 2 {
+		t.Fatalf("addOwned 后持有数应更新: got=%d", got)
+	}
+
+	// New() 默认初始化，直接 add 也不应 panic
+	e2 := mkEngine(t, config.PriceRules{})
+	e2.addOwned("夜猫子", 1)
+	if got := e2.ownedCount("夜猫子"); got != 1 {
+		t.Fatalf("New 初始化的 owned 应可写: got=%d", got)
+	}
+}
