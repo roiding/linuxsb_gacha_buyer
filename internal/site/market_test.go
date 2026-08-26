@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"gacha-buyer/internal/config"
@@ -90,6 +91,129 @@ func TestFetchMarketFilteredSendsQuery(t *testing.T) {
 	}
 	if gotPath != "/gacha_market" {
 		t.Fatalf("默认请求不应带筛选参数: %q", gotPath)
+	}
+}
+
+// cardHTML 生成一个可解析的市场卡片。
+func cardHTML(id int) string {
+	return fmt.Sprintf(`<article class="gacha-market-card"><div class="gacha-market-title">
+		<span class="gacha-title-badge gacha-title-n"><span class="gacha-title-name">路人甲</span></span></div>
+		<div class="gacha-market-meta"><span>单价 <strong>%d</strong> 积分</span><span>剩余 <strong>1</strong> 个</span></div>
+		<form class="gacha-market-buy"><input name="_csrf" value="%064d"><input name="listing_id" value="%d"></form>
+		</article>`, id*10, id, id)
+}
+
+// 分页聚合：满页继续翻；不足一页视为末页停止；跨页按 listing_id 去重。
+func TestFetchMarketPaged(t *testing.T) {
+	const pageSize = marketPageSize
+	fullPage := make([]string, 0, pageSize)
+	for i := 1; i <= pageSize; i++ {
+		fullPage = append(fullPage, cardHTML(i))
+	}
+	dupPage := []string{cardHTML(pageSize), cardHTML(801)} // 首条与上页末条重复
+
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gacha_market" {
+			http.NotFound(w, r)
+			return
+		}
+		requests = append(requests, r.URL.Query().Get("p"))
+		page := fullPage
+		if r.URL.Query().Get("p") == "2" {
+			page = dupPage
+		}
+		fmt.Fprint(w, strings.Join(page, "\n"))
+	}))
+	defer srv.Close()
+
+	cfg := config.Defaults()
+	cfg.Site = srv.URL
+	c, _ := NewClient(&cfg, nil)
+
+	listings, err := c.FetchMarketPaged(MarketQuery{}, nil)
+	if err != nil {
+		t.Fatalf("分页抓取失败: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("第 2 页不足一页应停止翻页，实际请求 p 序列: %v", requests)
+	}
+	if len(listings) != pageSize+1 {
+		t.Fatalf("去重后应 %d 条，得到 %d", pageSize+1, len(listings))
+	}
+	found := false
+	for _, l := range listings {
+		if l.ListingID == 801 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("第 2 页新增条目未被抓到")
+	}
+}
+
+// visit 回调返回 true 时提前终止翻页。
+func TestFetchMarketPagedEarlyStop(t *testing.T) {
+	const pageSize = marketPageSize
+	fullPage := make([]string, 0, pageSize)
+	for i := 1; i <= pageSize; i++ {
+		fullPage = append(fullPage, cardHTML(i))
+	}
+	var count int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count++
+		fmt.Fprint(w, strings.Join(fullPage, "\n"))
+	}))
+	defer srv.Close()
+
+	cfg := config.Defaults()
+	cfg.Site = srv.URL
+	c, _ := NewClient(&cfg, nil)
+
+	listings, err := c.FetchMarketPaged(MarketQuery{}, func([]market.Listing) bool { return true })
+	if err != nil {
+		t.Fatalf("分页抓取失败: %v", err)
+	}
+	if count != 1 || len(listings) != pageSize {
+		t.Fatalf("visit 提前终止应只请求 1 页: count=%d listings=%d", count, len(listings))
+	}
+}
+
+// 翻页请求应带上 q/rarity/sort/p 参数。
+func TestFetchMarketPagedSendsParams(t *testing.T) {
+	var uris []string
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uris = append(uris, r.URL.RequestURI())
+		q := r.URL.Query()
+		page := 1
+		if q.Get("p") != "" {
+			fmt.Sscanf(q.Get("p"), "%d", &page)
+		}
+		if page >= 2 {
+			close(stop)
+			fmt.Fprint(w, `<div class="gacha-market-grid"></div>`)
+			return
+		}
+		body := make([]string, 0, marketPageSize)
+		for i := 1; i <= marketPageSize; i++ {
+			body = append(body, cardHTML(i))
+		}
+		fmt.Fprint(w, strings.Join(body, "\n"))
+	}))
+	defer srv.Close()
+
+	cfg := config.Defaults()
+	cfg.Site = srv.URL
+	c, _ := NewClient(&cfg, nil)
+
+	_, err := c.FetchMarketPaged(MarketQuery{Q: "路人甲", Rarity: "n", Sort: "price_asc"}, nil)
+	if err != nil {
+		t.Fatalf("分页抓取失败: %v", err)
+	}
+	if len(uris) < 2 || uris[0] != "/gacha_market?q=%E8%B7%AF%E4%BA%BA%E7%94%B2&rarity=n&sort=price_asc" ||
+		uris[1] != "/gacha_market?p=2&q=%E8%B7%AF%E4%BA%BA%E7%94%B2&rarity=n&sort=price_asc" {
+		t.Fatalf("翻页应保留筛选参数并递增 p: %v", uris)
 	}
 }
 

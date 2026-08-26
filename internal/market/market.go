@@ -76,8 +76,11 @@ func ParseMarket(page string) ([]Listing, string, error) {
 	walk(doc)
 
 	if len(listings) == 0 {
-		// 空市场不算错误，但页面异常时给出提示
-		if !strings.Contains(page, "gacha-market-card") {
+		// 新版空结果页仍有列表容器和筛选表单，属正常情况；
+		// 连市场页特征都没有才是异常（未登录/被拦截）。
+		if !strings.Contains(page, "gacha-market-grid") &&
+			!strings.Contains(page, "gacha-market-filters") &&
+			!strings.Contains(page, "gacha-market-card") {
 			return listings, pageCSRF, fmt.Errorf("页面中未发现交易卡片（可能未登录或被拦截）")
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -32,34 +33,87 @@ func (c *Client) FetchTitleCatalog() ([]market.Title, error) {
 	return market.ParseTitleCatalog(page)
 }
 
-// FetchMarket 抓取默认市场页（全部等级，最新发布）。
+// FetchMarket 抓取市场全部在售列表（分页聚合，默认排序）。
 func (c *Client) FetchMarket() ([]market.Listing, error) {
-	return c.FetchMarketFiltered("", "")
+	return c.FetchMarketPaged(MarketQuery{}, nil)
 }
 
-// FetchMarketFiltered 按稀有度与排序抓取市场在售列表。
+// FetchMarketFiltered 按稀有度与排序抓取市场在售列表（分页聚合）。
 // rarity: ""|n|r|sr|ssr|ur；sort: ""|latest|price_asc|price_desc。
-// 市场页每类最多显示 100 条，配合分类+价格升序可覆盖"最新发布"100 条之外的便宜挂牌。
 func (c *Client) FetchMarketFiltered(rarity, sort string) ([]market.Listing, error) {
+	return c.FetchMarketPaged(MarketQuery{Rarity: rarity, Sort: sort}, nil)
+}
+
+// MarketPage 每页在售条数（当前站点 24 条/页）。
+const marketPageSize = 24
+
+// maxMarketPages 分页聚合的单次页数上限：325 条 ≈ 14 页，取约 3 倍冗余，
+// 防止站点异常（如筛选失效导致总数虚高、翻页参数被忽略）时无限翻页。
+const maxMarketPages = 42
+
+// MarketQuery 市场列表检索参数。
+type MarketQuery struct {
+	Q      string // 称号名称搜索
+	Rarity string // ""|n|r|sr|ssr|ur
+	Sort   string // ""|latest|price_asc|price_desc
+}
+
+// FetchMarketPaged 分页抓取市场在售列表并按 listing_id 去重聚合。
+// visit 在每页抓取后回调；返回 true 时提前终止翻页（如价格升序下整页超限），
+// 回调为 nil 表示抓全。任一页失败即整体报错——宁可不扫也不扫一半。
+func (c *Client) FetchMarketPaged(q MarketQuery, visit func([]market.Listing) bool) ([]market.Listing, error) {
+	seen := map[int]bool{}
+	var all []market.Listing
+	for p := 1; p <= maxMarketPages; p++ {
+		listings, err := c.fetchMarketPage(q, p)
+		if err != nil {
+			return all, err
+		}
+		for _, l := range listings {
+			if !seen[l.ListingID] {
+				seen[l.ListingID] = true
+				all = append(all, l)
+			}
+		}
+		if len(listings) < marketPageSize {
+			break // 末页（不足一页或空页）
+		}
+		if visit != nil && visit(listings) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond) // 翻页礼貌间隔
+	}
+	return all, nil
+}
+
+// fetchMarketPage 抓取市场单页（p 从 1 开始）。越界页站点会夹回末页，
+// 因此"返回不足一页"即视为结束信号。
+func (c *Client) fetchMarketPage(q MarketQuery, p int) ([]market.Listing, error) {
+	vals := url.Values{}
+	if q.Q != "" {
+		vals.Set("q", q.Q)
+	}
+	if q.Rarity != "" {
+		vals.Set("rarity", q.Rarity)
+	}
+	if q.Sort != "" {
+		vals.Set("sort", q.Sort)
+	}
+	if p > 1 {
+		vals.Set("p", strconv.Itoa(p))
+	}
 	path := "/gacha_market"
-	if rarity != "" || sort != "" {
-		q := url.Values{}
-		if rarity != "" {
-			q.Set("rarity", rarity)
-		}
-		if sort != "" {
-			q.Set("sort", sort)
-		}
-		path += "?" + q.Encode()
+	if len(vals) > 0 {
+		path += "?" + vals.Encode()
 	}
 	status, body, err := c.get(path)
 	if err != nil {
 		return nil, fmt.Errorf("访问市场页失败: %w", err)
 	}
+	page := string(body)
 	if status >= 300 && status < 400 {
 		return nil, errors.New("会话已失效（市场页发生重定向），需要重新登录")
 	}
-	page := string(body)
 	if strings.Contains(page, "name=\"password\"") && strings.Contains(page, "/login") {
 		return nil, errors.New("会话已失效，需要重新登录")
 	}

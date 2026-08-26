@@ -62,3 +62,17 @@ func TestParseMarketEmpty(t *testing.T) {
 		t.Fatal("无卡片页面应报错")
 	}
 }
+
+// 新版筛选无结果页：仍有列表容器与筛选表单，但没有卡片——不应误报未登录。
+func TestParseMarketEmptyFiltered(t *testing.T) {
+	page := `<div class="gacha-market-grid"></div>
+		<form class="gacha-market-filters" method="get" action="/gacha_market">
+			<input type="search" name="q"><select name="rarity"></select></form>`
+	listings, _, err := ParseMarket(page)
+	if err != nil {
+		t.Fatalf("新版空结果页不应报错: %v", err)
+	}
+	if len(listings) != 0 {
+		t.Fatalf("空结果页应解析出 0 条: %+v", listings)
+	}
+}
