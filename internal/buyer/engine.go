@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,10 @@ type Engine struct {
 	// owned 背包持有数缓存（称号名 → 数量），配合定向收购的 Max 限制使用；
 	// 每轮扫描开始时从 /gacha_profile 刷新。
 	owned map[string]int
+
+	// titleRarity 称号名 → 稀有度目录缓存。定向规则推算扫描分类要用目录页，
+	// 但目录极少变化：全部定向名都能命中缓存时就不再请求目录页。
+	titleRarity map[string]market.Rarity
 
 	client *site.Client
 }
@@ -173,7 +178,8 @@ func (e *Engine) Snapshot() Status {
 	return s
 }
 
-// scanOnce 单轮：登录保活 → 抓市场 → 匹配 → 下单。
+// scanOnce 单轮：登录保活 → 按启用分类价格升序扫描（整页超限价即停）→ 匹配 → 下单。
+// 单轮市场请求数 = 启用分类数，一般每类只请求第一页，避免密集全量翻页。
 func (e *Engine) scanOnce() {
 	e.scanMu.Lock()
 	defer e.scanMu.Unlock()
@@ -191,15 +197,15 @@ func (e *Engine) scanOnce() {
 	client = e.client
 	e.mu.Unlock()
 
-	listings, err := client.FetchMarket()
+	listings, err := e.fetchBuyables(client, &cfg)
 	if err != nil {
 		// 会话失效自动重登一次
 		if isSessionLost(err) {
 			e.logf("会话失效，重新登录…")
 			if lerr := client.Login(); lerr != nil {
 				err = fmt.Errorf("重登失败: %w", lerr)
-			} else if listings, err = client.FetchMarket(); err != nil {
-				err = fmt.Errorf("重抓市场失败: %w", err)
+			} else if listings, err = e.fetchBuyables(client, &cfg); err != nil {
+				err = fmt.Errorf("重扫市场失败: %w", err)
 			}
 		}
 		if err != nil {
@@ -238,8 +244,8 @@ func (e *Engine) scanOnce() {
 	e.recordError(nil)
 }
 
-// DeepScanNow 立即按采购配置启用的稀有度分类（N/R/SR/UR/SSR）以价格升序各扫一遍市场并收购，
-// 覆盖"最新发布 100 条"之外的便宜挂牌。先确保会话可用，扫描在后台执行。
+// DeepScanNow 立即按采购配置启用的稀有度分类（N/R/SR/UR/SSR）以价格升序分页扫全市场并收购，
+// 覆盖第一页之外的便宜挂牌。先确保会话可用，扫描在后台执行。
 func (e *Engine) DeepScanNow() error {
 	if err := e.ensureClient(e.cfg); err != nil {
 		return err
@@ -268,7 +274,7 @@ func (e *Engine) deepScan() {
 			return
 		default:
 		}
-		listings, err := client.FetchMarketFiltered(string(r), "price_asc")
+		listings, err := fetchCategoryAsc(client, r, e.categoryMaxLimit(&cfg, r))
 		if err != nil {
 			e.logf("深度收购 %s 分类抓取失败: %v", r, err)
 			continue
@@ -276,11 +282,9 @@ func (e *Engine) deepScan() {
 		bought := 0
 		for _, l := range listings {
 			limit := limitFor(&cfg, l)
-			if limit <= 0 || l.Remain <= 0 {
+			if limit <= 0 || l.Remain <= 0 || l.Price > limit {
+				// 定向价与类型限价并存时同一页内可买/不可买混排，不能整段 break
 				continue
-			}
-			if l.Price > limit {
-				break // price_asc 升序，后续挂牌只会更贵
 			}
 			e.buyOne(client, l)
 			bought++
@@ -288,6 +292,88 @@ func (e *Engine) deepScan() {
 		e.logf("深度收购 %s：在售 %d 条，命中并尝试 %d 条", r, len(listings), bought)
 	}
 	e.logf("深度收购完成")
+}
+
+// fetchBuyables 按启用分类以价格升序抓取限价范围内的在售挂牌并按 listing_id 去重合并。
+// 单轮市场请求数 = 启用分类数（一般每类只请求第一页）。
+// 未启用任何分类时返回空且不发请求；任一分类会话失效则返回该错误由上层重登。
+func (e *Engine) fetchBuyables(client *site.Client, cfg *config.Config) ([]market.Listing, error) {
+	rarities := activeRarities(cfg)
+	rarities = e.raritiesWithTargets(client, rarities, cfg)
+	if len(rarities) == 0 {
+		return nil, nil
+	}
+	seen := map[int]bool{}
+	var all []market.Listing
+	for _, r := range rarities {
+		listings, err := fetchCategoryAsc(client, r, e.categoryMaxLimit(cfg, r))
+		if err != nil {
+			if isSessionLost(err) {
+				return nil, err
+			}
+			e.logf("[扫描] %s 分类抓取失败: %v", r, err)
+			continue
+		}
+		for _, l := range listings {
+			if !seen[l.ListingID] {
+				seen[l.ListingID] = true
+				all = append(all, l)
+			}
+		}
+	}
+	return all, nil
+}
+
+// fetchCategoryAsc 抓取单个分类价格升序的在售列表。maxLimit 为该分类内所有
+// 可适用限价（类型限价、SSR 单卡价、定向价）的最大值：升序下页内只要出现
+// 超过 maxLimit 的挂牌，后续页只可能更贵，立即停止翻页。
+// maxLimit<=0 表示该分类没有任何限价规则，不发起请求。
+func fetchCategoryAsc(client *site.Client, r market.Rarity, maxLimit int) ([]market.Listing, error) {
+	if maxLimit <= 0 {
+		return nil, nil
+	}
+	return client.FetchMarketPaged(
+		site.MarketQuery{Rarity: string(r), Sort: "price_asc"},
+		func(page []market.Listing) bool {
+			for _, l := range page {
+				if l.Price > maxLimit {
+					return true
+				}
+			}
+			return false
+		},
+	)
+}
+
+// categoryMaxLimit 分类内所有可适用限价的最大值：类型限价、SSR 单卡价，
+// 以及按称号目录缓存归入该分类的定向价格。价格升序扫描用它做翻页止损线。
+func (e *Engine) categoryMaxLimit(cfg *config.Config, r market.Rarity) int {
+	maxLimit := 0
+	switch r {
+	case market.N:
+		maxLimit = cfg.Rules.N
+	case market.R:
+		maxLimit = cfg.Rules.R
+	case market.SR:
+		maxLimit = cfg.Rules.SR
+	case market.UR:
+		maxLimit = cfg.Rules.UR
+	case market.SSR:
+		for _, p := range cfg.SSRPrices {
+			if p > maxLimit {
+				maxLimit = p
+			}
+		}
+	}
+	e.mu.Lock()
+	tr := e.titleRarity
+	e.mu.Unlock()
+	for name, t := range cfg.Targets {
+		if tr != nil && tr[name] == r && t.Price > maxLimit {
+			maxLimit = t.Price
+		}
+	}
+	return maxLimit
 }
 
 // activeRarities 返回采购配置中启用的稀有度分类（对应限价 > 0）。
@@ -311,35 +397,61 @@ func activeRarities(cfg *config.Config) []market.Rarity {
 	return out
 }
 
+// rarityRank 稀有度展示顺序，用于定向分类追加时保持确定序（map 遍历是随机的）。
+var rarityRank = map[market.Rarity]int{market.N: 0, market.R: 1, market.SR: 2, market.SSR: 3, market.UR: 4}
+
 // raritiesWithTargets 在 activeRarities 基础上，补充定向规则涉及的稀有度分类：
 // 即使该类型的限价为 0（类型收购关闭），只要存在定向单卡规则也会扫描该分类，
-// 保证"只收某张卡"时深度收购仍能覆盖。
+// 保证"只收某张卡"时仍能覆盖。称号目录缓存在 e.titleRarity，全部定向名命中
+// 缓存时不再请求目录页；出现未命中（新增定向名/站点上新称号）才重新拉取。
 func (e *Engine) raritiesWithTargets(client *site.Client, base []market.Rarity, cfg *config.Config) []market.Rarity {
 	if len(cfg.Targets) == 0 {
 		return base
 	}
-	catalog, err := client.FetchTitleCatalog()
-	if err != nil {
-		e.logf("补充定向分类失败（读称号目录）: %v", err)
-		return base
+	e.mu.Lock()
+	cached := e.titleRarity
+	e.mu.Unlock()
+	needFetch := cached == nil
+	for name := range cfg.Targets {
+		if _, ok := cached[name]; !ok {
+			needFetch = true
+			break
+		}
 	}
-	rarityOf := make(map[string]market.Rarity, len(catalog))
-	for _, t := range catalog {
-		rarityOf[t.Name] = t.Rarity
+	if needFetch {
+		catalog, err := client.FetchTitleCatalog()
+		if err != nil {
+			e.logf("补充定向分类失败（读称号目录）: %v", err)
+			// 目录拉不到时退回缓存（若有）：宁可少补分类也别每轮都打目录页。
+			if cached == nil {
+				return base
+			}
+		} else {
+			m := make(map[string]market.Rarity, len(catalog))
+			for _, t := range catalog {
+				m[t.Name] = t.Rarity
+			}
+			e.mu.Lock()
+			e.titleRarity = m
+			e.mu.Unlock()
+			cached = m
+		}
 	}
 	seen := make(map[market.Rarity]bool, len(base))
 	for _, r := range base {
 		seen[r] = true
 	}
+	var extra []market.Rarity
 	for name := range cfg.Targets {
-		r, ok := rarityOf[name]
+		r, ok := cached[name]
 		if !ok || seen[r] {
 			continue
 		}
 		seen[r] = true
-		base = append(base, r)
+		extra = append(extra, r)
 	}
-	return base
+	sort.Slice(extra, func(i, j int) bool { return rarityRank[extra[i]] < rarityRank[extra[j]] })
+	return append(base, extra...)
 }
 
 func (e *Engine) stopped() <-chan struct{} {
@@ -576,7 +688,6 @@ func (e *Engine) ownedCount(name string) int {
 	return e.owned[name]
 }
 
-// addOwned 购买确认成交后增加缓存持有数，避免同轮多个挂牌超收。
 // addOwned 购买确认成交后增加缓存持有数，避免同轮多个挂牌超收。
 // owned 在 New() 中已初始化为空 map；此处再兜底一次，防止历史数据/异常路径下为 nil。
 func (e *Engine) addOwned(name string, qty int) {
