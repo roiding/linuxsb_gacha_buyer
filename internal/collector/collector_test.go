@@ -260,6 +260,8 @@ func TestRetryNeeded(t *testing.T) {
 		{"打赏待核验", TransferLog{Pending: true}, true},
 		{"可重试失败且打赏>0", TransferLog{TipAmount: 20, Retryable: true}, true},
 		{"硬条件失败不重试", TransferLog{TipAmount: 20, Retryable: false}, false},
+		{"签到等打赏前失败也重试", TransferLog{Retryable: true}, true},
+		{"确认过的失败不重试", TransferLog{Retryable: false, Confirmed: true}, false},
 		{"抽卡未落定", TransferLog{OK: true, GachaPending: true}, true},
 		{"全部完成", TransferLog{OK: true, Confirmed: true, TipAmount: 20}, false},
 		{"空包无打赏", TransferLog{OK: true}, false},
@@ -298,5 +300,81 @@ func TestGachaPendingDrivesPlanRetry(t *testing.T) {
 	}
 	if p := plans[0]; p.Status != "retry" || p.PlannedAt.Sub(frozen) != retryDelay {
 		t.Fatalf("抽卡未落定应 retry+15min: %+v", p)
+	}
+}
+
+func TestSyncPlansAddsNewSubSameDay(t *testing.T) {
+	e, d, cleanup := newTestEngine(t, enabledSubs("a@x.com"))
+	defer cleanup()
+	frozen := time.Date(2026, 8, 26, 12, 0, 0, 0, time.Local)
+	e.nowFn = func() time.Time { return frozen }
+	day := frozen.Format("2006-01-02")
+	e.ensurePlans(day, frozen)
+	plans0, err := d.GetCollectorSchedules(day)
+	if err != nil || len(plans0) != 1 {
+		t.Fatalf("初始计划生成失败: %+v %v", plans0, err)
+	}
+	aBefore := plans0[0].PlannedAt
+
+	// 运行中途通过 UI 新增小号：补排计划不应影响已排定的 a。
+	e.cfg.Subs = append(e.cfg.Subs, config.SubAccount{Username: "b@x.com", Enabled: true})
+	e.SyncPlans()
+
+	plans, err := d.GetCollectorSchedules(day)
+	if err != nil || len(plans) != 2 {
+		t.Fatalf("新号应立即有当天计划: %+v %v", plans, err)
+	}
+	byAccount := map[string]*db.CollectorSchedule{}
+	for _, p := range plans {
+		byAccount[p.Account] = p
+	}
+	a, b := byAccount["a@x.com"], byAccount["b@x.com"]
+	if a == nil || !a.PlannedAt.Equal(aBefore) {
+		t.Fatalf("原有计划不应被重排: %+v (之前 %v)", a, aBefore)
+	}
+	if b == nil || b.Status != "planned" || !b.PlannedAt.After(frozen) {
+		t.Fatalf("新增小号应补排为当天未来时刻: %+v", b)
+	}
+}
+
+func TestPreTipFailureRetries(t *testing.T) {
+	e, d, cleanup := newTestEngine(t, enabledSubs("fail@x.com"))
+	defer cleanup()
+	frozen := time.Date(2026, 8, 25, 10, 0, 0, 0, time.Local)
+	e.nowFn = func() time.Time { return frozen }
+	// 模拟签到失败：发生在打赏之前，TipAmount 尚未赋值。
+	e.collectFn = func(cfg config.Config, sub config.SubAccount) TransferLog {
+		return TransferLog{Time: frozen, Sub: maskUser(sub.Username), Retryable: true, Message: "签到失败"}
+	}
+	e.RunOnce(false)
+
+	day := frozen.Format("2006-01-02")
+	plans, err := d.GetCollectorSchedules(day)
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("计划读取失败: %+v %v", plans, err)
+	}
+	if p := plans[0]; p.Status != "retry" || p.PlannedAt.Sub(frozen) != retryDelay {
+		t.Fatalf("打赏前失败也应 retry+15min: %+v", p)
+	}
+}
+
+func TestRetryCapMarksCompleted(t *testing.T) {
+	e, d, cleanup := newTestEngine(t, enabledSubs("stuck@x.com"))
+	defer cleanup()
+	frozen := time.Date(2026, 8, 25, 10, 0, 0, 0, time.Local)
+	e.nowFn = func() time.Time { return frozen }
+	day := frozen.Format("2006-01-02")
+	_ = d.SaveCollectorSchedule(&db.CollectorSchedule{Day: day, Account: "stuck@x.com", PlannedAt: frozen, Status: "retry", Retries: maxDailyRetries})
+	e.collectFn = func(cfg config.Config, sub config.SubAccount) TransferLog {
+		return TransferLog{Time: frozen, Sub: maskUser(sub.Username), Retryable: true, Message: "持续失败"}
+	}
+	e.RunOnce(false)
+
+	plans, err := d.GetCollectorSchedules(day)
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("计划读取失败: %+v %v", plans, err)
+	}
+	if p := plans[0]; p.Status != "completed" || p.Retries != maxDailyRetries {
+		t.Fatalf("超过重试上限应标 completed 不再自增: %+v", p)
 	}
 }

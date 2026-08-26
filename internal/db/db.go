@@ -89,14 +89,15 @@ func migrate(d *sql.DB) error {
 				message       TEXT NOT NULL DEFAULT ''
 			)`,
 		`CREATE TABLE IF NOT EXISTS collector_schedule (
-				day          TEXT NOT NULL,
-				account      TEXT NOT NULL,
-				planned_at   TEXT NOT NULL,
-				started_at   TEXT NOT NULL DEFAULT '',
-				completed_at TEXT NOT NULL DEFAULT '',
-				status       TEXT NOT NULL DEFAULT 'planned',
-				PRIMARY KEY (day, account)
-			)`,
+			day          TEXT NOT NULL,
+			account      TEXT NOT NULL,
+			planned_at   TEXT NOT NULL,
+			started_at   TEXT NOT NULL DEFAULT '',
+			completed_at TEXT NOT NULL DEFAULT '',
+			status       TEXT NOT NULL DEFAULT 'planned',
+			retries      INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (day, account)
+		)`,
 		`CREATE TABLE IF NOT EXISTS lottery_replies (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
 			time        TEXT NOT NULL,
@@ -145,9 +146,17 @@ func migrate(d *sql.DB) error {
 			started_at   TEXT NOT NULL DEFAULT '',
 			completed_at TEXT NOT NULL DEFAULT '',
 			status       TEXT NOT NULL DEFAULT 'planned',
+			retries      INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (day, account)
 		)`); err != nil {
 			return fmt.Errorf("重建 collector_schedule 失败: %w", err)
+		}
+	}
+	if ok, err := hasColumn(d, "collector_schedule", "retries"); err != nil {
+		return err
+	} else if !ok {
+		if _, err := d.Exec(`ALTER TABLE collector_schedule ADD COLUMN retries INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("迁移 collector_schedule.retries 失败: %w", err)
 		}
 	}
 	if ok, err := hasColumn(d, "purchases", "submitted"); err != nil {

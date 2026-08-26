@@ -109,6 +109,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		if in.Collector != nil {
 			s.col.Reschedule()
 		}
+		switch in.Action {
+		case "add", "toggle":
+			// 新增/启用的小号立即补排当天计划，否则要等次日 00:05 才有随机时刻。
+			s.col.SyncPlans()
+		}
 
 		s.mgr.Resync()
 		writeJSON(w, map[string]any{"ok": true})

@@ -217,11 +217,12 @@ type CollectorSchedule struct {
 	StartedAt   time.Time `json:"started_at,omitempty"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 	Status      string    `json:"status"`
+	Retries     int       `json:"retries,omitempty"`
 }
 
 // GetCollectorSchedules 读取指定自然日全部小号的归集计划。
 func (d *DB) GetCollectorSchedules(day string) ([]*CollectorSchedule, error) {
-	rows, err := d.Query(`SELECT day, account, planned_at, started_at, completed_at, status FROM collector_schedule WHERE day=?`, day)
+	rows, err := d.Query(`SELECT day, account, planned_at, started_at, completed_at, status, retries FROM collector_schedule WHERE day=?`, day)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +231,7 @@ func (d *DB) GetCollectorSchedules(day string) ([]*CollectorSchedule, error) {
 	for rows.Next() {
 		s := &CollectorSchedule{}
 		var planned, started, completed string
-		if err := rows.Scan(&s.Day, &s.Account, &planned, &started, &completed, &s.Status); err != nil {
+		if err := rows.Scan(&s.Day, &s.Account, &planned, &started, &completed, &s.Status, &s.Retries); err != nil {
 			return nil, err
 		}
 		s.PlannedAt, _ = time.Parse(time.RFC3339, planned)
@@ -247,9 +248,9 @@ func (d *DB) GetCollectorSchedules(day string) ([]*CollectorSchedule, error) {
 
 // SaveCollectorSchedule 保存某个小号当天的归集计划。
 func (d *DB) SaveCollectorSchedule(s *CollectorSchedule) error {
-	_, err := d.Exec(`INSERT INTO collector_schedule(day, account, planned_at, started_at, completed_at, status)
-		VALUES(?,?,?,?,?,?) ON CONFLICT(day, account) DO UPDATE SET planned_at=excluded.planned_at, started_at=excluded.started_at, completed_at=excluded.completed_at, status=excluded.status`,
-		s.Day, s.Account, s.PlannedAt.UTC().Format(time.RFC3339), formatTime(s.StartedAt), formatTime(s.CompletedAt), s.Status)
+	_, err := d.Exec(`INSERT INTO collector_schedule(day, account, planned_at, started_at, completed_at, status, retries)
+		VALUES(?,?,?,?,?,?,?) ON CONFLICT(day, account) DO UPDATE SET planned_at=excluded.planned_at, started_at=excluded.started_at, completed_at=excluded.completed_at, status=excluded.status, retries=excluded.retries`,
+		s.Day, s.Account, s.PlannedAt.UTC().Format(time.RFC3339), formatTime(s.StartedAt), formatTime(s.CompletedAt), s.Status, s.Retries)
 	return err
 }
 

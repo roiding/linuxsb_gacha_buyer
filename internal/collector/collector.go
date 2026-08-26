@@ -29,6 +29,8 @@ var (
 	collectorRetryWait   = func(attempt int) time.Duration { return time.Duration(attempt*3) * time.Second }
 	// retryDelay 临时失败（可重试）后重新执行的等待时长。
 	retryDelay = 15 * time.Minute
+	// maxDailyRetries 单号单日最大重试轮数，防止持续失败时每 15 分钟刷到午夜。
+	maxDailyRetries = 6
 )
 
 // Engine 管理每个小号当天的独立归集时刻，并用 robfig/cron 触发执行。
@@ -160,6 +162,11 @@ func (e *Engine) Reschedule() {
 		e.logf("重算归集计划失败: %v", err)
 	}
 	e.rebuildJobs(now)
+}
+
+// SyncPlans 为新增/启用的小号补建当天计划，不影响其它小号已排定的时刻。
+func (e *Engine) SyncPlans() {
+	e.rebuildJobs(e.now())
 }
 
 // rebuildJobs 读当天计划：到点或已过的账号补执行，未到点的注册一次性任务。
@@ -362,8 +369,14 @@ func (e *Engine) collectAndSchedule(cfg config.Config, sub config.SubAccount) Tr
 		return log
 	}
 	now = e.now()
-	if retryNeeded(log) {
+	retry := retryNeeded(log)
+	if retry && plan.Retries >= maxDailyRetries {
+		e.logf("[归集] %s 今日已重试 %d 次仍未落定，放弃至明天", sub.Username, plan.Retries)
+		retry = false
+	}
+	if retry {
 		plan.Status = "retry"
+		plan.Retries++
 		plan.PlannedAt = now.Add(retryDelay)
 		plan.CompletedAt = time.Time{}
 	} else {
@@ -649,9 +662,10 @@ func isRetryableDonate(result site.DonateResult) bool {
 	return result.Retryable
 }
 
-// retryNeeded 该轮结果是否还需要今日再跑：打赏待核验/可重试失败，或免费抽卡/赠送未落定。
+// retryNeeded 该轮结果是否还需要今日再跑：打赏待核验/任何可重试失败（含打赏前的
+// 取会话、签到、查余额、找帖子），或免费抽卡/赠送未落定。
 func retryNeeded(log TransferLog) bool {
-	return log.Pending || (!log.OK && log.TipAmount > 0 && log.Retryable) || log.GachaPending
+	return log.Pending || (!log.OK && !log.Confirmed && log.Retryable) || log.GachaPending
 }
 
 // doGachaTask 完成小号每日免费一抽并尝试把当日抽到的称号赠送给主号。
