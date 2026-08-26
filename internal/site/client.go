@@ -117,15 +117,20 @@ func (c *Client) IsLoggedIn() bool {
 	return reSideUID.MatchString(page) && !strings.Contains(page, `name="password"`)
 }
 
-// postForm 提交表单。
+// postForm 提交表单（Referer 设为目标路径，兼容旧调用）。
 func (c *Client) postForm(path string, form url.Values) (int, []byte, error) {
+	return c.postFormRef(path, path, form)
+}
+
+// postFormRef 提交表单，Referer 设为 referer 参数指定的页面路径。
+func (c *Client) postFormRef(path, referer string, form url.Values) (int, []byte, error) {
 	req, err := http.NewRequest(http.MethodPost, c.base+path, strings.NewReader(form.Encode()))
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Referer", c.base+path)
+	req.Header.Set("Referer", c.base+referer)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -412,7 +417,7 @@ func looksLoggedIn(page string, status int) (bool, string) {
 
 // extractAlert 提取页面错误提示。
 func extractAlert(page string) string {
-	re := regexp.MustCompile(`(?is)<div[^>]*class="[^"]*(alert|error|notice)[^"]*"[^>]*>(.*?)</div>`)
+	re := regexp.MustCompile(`(?is)<div[^>]*class="[^"]*(alert|error|notice|toast)[^"]*"[^>]*>(.*?)</div>`)
 	m := re.FindStringSubmatch(page)
 	if m == nil {
 		return ""

@@ -707,7 +707,9 @@ func (e *Engine) giftDrawnTitle(client *site.Client, title string, cfg config.Co
 
 // mainGiftTarget 返回主号在站点的显示用户名（赠送接收方）。
 // 优先用主号 UID 反查用户页 title；查不到时退回配置中的主号用户名。
+// 返回前统一清理首尾空白（含不换行空格），避免赠送目标不匹配。
 func (e *Engine) mainGiftTarget(sub *site.Client) string {
+	target := e.cfg.Username
 	if acct, err := e.d.GetAccount("main", e.cfg.Username); err == nil && acct != nil && acct.UID > 0 {
 		if status, body, gErr := sub.RawGet(fmt.Sprintf("/user/%d", acct.UID)); gErr == nil && status == 200 {
 			if name := site.UsernameFromProfilePage(string(body)); name != "" {
@@ -715,7 +717,7 @@ func (e *Engine) mainGiftTarget(sub *site.Client) string {
 			}
 		}
 	}
-	return e.cfg.Username
+	return site.CleanUsername(target)
 }
 
 func joinGachaMsg(prev, add string) string {

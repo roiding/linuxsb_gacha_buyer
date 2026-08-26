@@ -137,6 +137,7 @@ type ProfileTitle struct {
 // 只操作名称完全匹配的称号；可赠送数 = 总数 − 佩戴中的 1 张，不足 1 张不赠送。
 // title_id 从 /gacha_profile 对应卡片的赠送按钮解析。
 func (c *Client) GiftTitle(target, titleName string) GiftResult {
+	target = CleanUsername(target)
 	if target == "" {
 		return GiftResult{Message: "赠送目标用户名为空"}
 	}
@@ -163,7 +164,7 @@ func (c *Client) GiftTitle(target, titleName string) GiftResult {
 	form.Set("_csrf", csrf)
 	form.Set("title_id", strconv.Itoa(id))
 	form.Set("username", target)
-	st, resp, err := c.postForm(gachaGiftPath, form)
+	st, resp, err := c.postFormRef(gachaGiftPath, gachaProfilePath, form)
 	if err != nil {
 		return GiftResult{OK: false, Target: target, TitleID: id, Message: "赠送请求异常: " + err.Error()}
 	}
@@ -274,7 +275,7 @@ func isGiftFailure(message string) bool {
 	if message == "" {
 		return false
 	}
-	for _, word := range []string{"失败", "错误", "无效", "不足", "不存在", "不能", "无法", "拒绝", "未登录", "上限", "不允许"} {
+	for _, word := range []string{"失败", "错误", "无效", "不足", "不存在", "已拥有", "已存在", "已领取", "不能", "无法", "拒绝", "未登录", "上限", "不允许"} {
 		if strings.Contains(message, word) {
 			return true
 		}
@@ -293,7 +294,15 @@ func UsernameFromProfilePage(page string) string {
 	if i := strings.Index(title, " - "); i > 0 {
 		title = strings.TrimSpace(title[:i])
 	}
-	return title
+	return CleanUsername(title)
+}
+
+// CleanUsername 去掉用户名首尾所有空白（含不换行空格 &nbsp;=U+00A0 和全角空格）。
+// 站点页面可能包含多余空格导致赠送目标不匹配。
+func CleanUsername(name string) string {
+	return strings.TrimFunc(name, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\u00a0' || r == '\u3000'
+	})
 }
 
 // visibleSnippet 提取页面可见文本的片段（用于诊断消息）。

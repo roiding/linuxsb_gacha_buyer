@@ -197,6 +197,7 @@ func TestGiftTitleFlow(t *testing.T) {
 		</div>
 		<form method="post" action="/gacha_gift"><input type="hidden" name="_csrf" value="0123456789abcdef0123456789abcdef"></form>`
 	var postForm url.Values
+	var referer string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/gacha_profile":
@@ -204,6 +205,7 @@ func TestGiftTitleFlow(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/gacha_gift":
 			_ = r.ParseForm()
 			postForm = r.PostForm
+			referer = r.Header.Get("Referer")
 			fmt.Fprint(w, `<div class="alert alert-success">已赠送给 Se7en</div>`)
 		default:
 			http.NotFound(w, r)
@@ -220,6 +222,10 @@ func TestGiftTitleFlow(t *testing.T) {
 	}
 	if postForm.Get("title_id") != "13" || postForm.Get("username") != "Se7en" || postForm.Get("_csrf") != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("赠送请求体错误: %v", postForm)
+	}
+	// Referer 应指向表单所在页（/gacha_profile），与浏览器表单提交一致。
+	if referer != server.URL+"/gacha_profile" {
+		t.Fatalf("赠送请求 Referer 错误: %q", referer)
 	}
 }
 
@@ -244,5 +250,53 @@ func TestGiftTitleEquippedOnlyRefuses(t *testing.T) {
 	}
 	if !strings.Contains(res.Message, "佩戴") {
 		t.Fatalf("应提示佩戴不可送: %s", res.Message)
+	}
+}
+
+func TestIsGiftFailure(t *testing.T) {
+	for _, msg := range []string{"接收用户不存在", "对方已拥有该称号", "已存在", "已领取", "赠送失败", "称号不存在", "数量不足", "不能赠送给自己", "未登录"} {
+		if !isGiftFailure(msg) {
+			t.Fatalf("应识别为赠送失败: %s", msg)
+		}
+	}
+	for _, msg := range []string{"已赠送给 Se7en", "操作成功", "赠送请求已提交", ""} {
+		if isGiftFailure(msg) {
+			t.Fatalf("不应误判为失败: %q", msg)
+		}
+	}
+}
+
+func TestGiftTitleToastErrorDetected(t *testing.T) {
+	// 站点把错误放在 toast div 中（非 alert），extractAlert 应能提取。
+	const profilePage = `<form method="post" action="/search">...</form>
+		<div class="gacha-profile-item">
+			<span class="gacha-title-name">键盘侠</span>
+			<span class="gacha-status-tag gacha-status-permanent">× 1</span>
+			<button class="gacha-gift-btn" onclick="gachaGiftModalOpen({&quot;id&quot;:13,&quot;name&quot;:&quot;\u952e\u76d8\u4fa0&quot;})">赠送</button>
+		</div>
+		<form method="post" action="/gacha_gift"><input type="hidden" name="_csrf" value="cafebabe1234567890abcdef1234567890"></form>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/gacha_profile":
+			fmt.Fprint(w, profilePage)
+		case r.Method == http.MethodPost && r.URL.Path == "/gacha_gift":
+			// 2xx 但错误信息在 toast 中（之前被 extractAlert 遗漏）
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `<div class="toast" id="toast" hidden="">接收用户不存在</div>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.Defaults()
+	cfg.Site = server.URL
+	client, _ := NewClient(&cfg, nil)
+	res := client.GiftTitle("Se7en", "键盘侠")
+	if res.OK || res.Gifted {
+		t.Fatalf("toast 错误应被识别为赠送失败: %+v", res)
+	}
+	if !strings.Contains(res.Message, "不存在") {
+		t.Fatalf("错误消息应包含 toast 内容: %s", res.Message)
 	}
 }
