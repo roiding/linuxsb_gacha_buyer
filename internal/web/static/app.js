@@ -242,6 +242,7 @@ async function loadConfig() {
     f.ur.value = c.rules.ur;
     f.min_balance.value = c.min_balance;
     f.scan_sec.value = c.scan_sec;
+    f.scan_mode.value = c.scan_mode || "";
   } catch (e) { console.error(e); }
 }
 
@@ -252,6 +253,7 @@ $("#cfg-form").addEventListener("submit", async (ev) => {
     rules: { sr: +f.sr.value, r: +f.r.value, n: +f.n.value, ur: +f.ur.value },
     min_balance: +f.min_balance.value,
     scan_sec: +f.scan_sec.value,
+    scan_mode: f.scan_mode.value,
   };
   try {
     await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

@@ -79,7 +79,7 @@ func (e *Engine) Start() error {
 	e.mu.Unlock()
 
 	go e.loop()
-	e.logf("收购引擎已启动 (间隔 %ds, dry_run=%v)", e.cfg.ScanSec, e.cfg.DryRun)
+	e.logf("收购引擎已启动 (间隔 %ds, 扫描=%s, dry_run=%v)", e.cfg.ScanSec, e.cfg.EffectiveScanMode(), e.cfg.DryRun)
 	return nil
 }
 
@@ -178,8 +178,8 @@ func (e *Engine) Snapshot() Status {
 	return s
 }
 
-// scanOnce 单轮：登录保活 → 按启用分类价格升序扫描（整页超限价即停）→ 匹配 → 下单。
-// 单轮市场请求数 = 启用分类数，一般每类只请求第一页，避免密集全量翻页。
+// scanOnce 单轮：登录保活 → 按配置的扫描方式抓取候选（fast 只扫默认页 1 请求；
+// thorough 按分类价格升序翻页，页内超限即停）→ 匹配 → 下单。
 func (e *Engine) scanOnce() {
 	e.scanMu.Lock()
 	defer e.scanMu.Unlock()
@@ -294,10 +294,19 @@ func (e *Engine) deepScan() {
 	e.logf("深度收购完成")
 }
 
-// fetchBuyables 按启用分类以价格升序抓取限价范围内的在售挂牌并按 listing_id 去重合并。
-// 单轮市场请求数 = 启用分类数（一般每类只请求第一页）。
-// 未启用任何分类时返回空且不发请求；任一分类会话失效则返回该错误由上层重登。
+// fetchBuyables 按配置的扫描方式抓取候选挂牌。
+// fast：只请求市场默认页（最新发布 24 条，每轮 1 个请求），适合短间隔快扫；
+// thorough：按启用分类价格升序翻页，单轮请求数 = 启用分类数（一般每类只请求第一页）。
 func (e *Engine) fetchBuyables(client *site.Client, cfg *config.Config) ([]market.Listing, error) {
+	if cfg.EffectiveScanMode() == "fast" {
+		return client.FetchMarketDefaultPage()
+	}
+	return e.fetchBuyablesThorough(client, cfg)
+}
+
+// fetchBuyablesThorough 按启用分类以价格升序抓取限价范围内的在售挂牌并按 listing_id 去重合并。
+// 未启用任何分类时返回空且不发请求；任一分类会话失效则返回该错误由上层重登。
+func (e *Engine) fetchBuyablesThorough(client *site.Client, cfg *config.Config) ([]market.Listing, error) {
 	rarities := activeRarities(cfg)
 	rarities = e.raritiesWithTargets(client, rarities, cfg)
 	if len(rarities) == 0 {

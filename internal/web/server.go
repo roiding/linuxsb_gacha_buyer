@@ -138,6 +138,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"min_balance": s.cfg.MinBalance,
 			"dry_run":     s.cfg.DryRun,
 			"scan_sec":    s.cfg.ScanSec,
+			"scan_mode":   s.cfg.ScanMode,
 			"listen":      s.cfg.Listen,
 		})
 	case http.MethodPost:
@@ -148,6 +149,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			MinBalance *int                          `json:"min_balance"`
 			DryRun     *bool                         `json:"dry_run"`
 			ScanSec    *int                          `json:"scan_sec"`
+			ScanMode   *string                       `json:"scan_mode"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -172,6 +174,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.ScanSec != nil {
 			s.cfg.ScanSec = *in.ScanSec
+		}
+		if in.ScanMode != nil {
+			s.cfg.ScanMode = *in.ScanMode
 		}
 		s.cfg.Normalize()
 		if err := config.Save(s.d, s.cfg); err != nil {

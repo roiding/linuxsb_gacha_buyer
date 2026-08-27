@@ -57,6 +57,32 @@ func TestCollectorDefaultsAndNormalizeWithoutWindowFields(t *testing.T) {
 	}
 }
 
+func TestEffectiveScanMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		scanSec  int
+		scanMode string
+		want     string
+	}{
+		{"间隔5秒自动快扫", 5, "", "fast"},
+		{"间隔10秒自动快扫", 10, "", "fast"},
+		{"间隔11秒自动分类扫", 11, "", "thorough"},
+		{"间隔60秒自动分类扫", 60, "", "thorough"},
+		{"强制快扫", 60, "fast", "fast"},
+		{"强制分类扫", 5, "thorough", "thorough"},
+		{"非法值回落自动", 60, "turbo", "thorough"},
+	}
+	for _, c := range cases {
+		cfg := Defaults()
+		cfg.ScanSec = c.scanSec
+		cfg.ScanMode = c.scanMode
+		cfg.Normalize()
+		if got := cfg.EffectiveScanMode(); got != c.want {
+			t.Fatalf("%s: EffectiveScanMode()=%s want %s", c.name, got, c.want)
+		}
+	}
+}
+
 func TestTargetsNormalize(t *testing.T) {
 	cfg := Defaults()
 	cfg.Targets = map[string]TargetRule{

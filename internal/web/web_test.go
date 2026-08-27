@@ -173,6 +173,46 @@ func TestMarketPublishCancelRoutes(t *testing.T) {
 	}
 }
 
+func TestConfigScanModeRoundTrip(t *testing.T) {
+	s, _ := newTestServer(t)
+	get := func() string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/config", nil))
+		if rec.Code != 200 {
+			t.Fatalf("GET /api/config: %d %s", rec.Code, rec.Body.String())
+		}
+		var out struct {
+			ScanMode string `json:"scan_mode"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.ScanMode
+	}
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/config",
+		bytes.NewBufferString(`{"scan_mode":"fast"}`)))
+	if rec.Code != 200 {
+		t.Fatalf("POST /api/config scan_mode: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := get(); got != "fast" {
+		t.Fatalf("scan_mode 应保存为 fast: %q", got)
+	}
+
+	// 非法值应回落为空（自动）
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/config",
+		bytes.NewBufferString(`{"scan_mode":"turbo"}`)))
+	if rec.Code != 200 {
+		t.Fatalf("POST /api/config 非法 scan_mode: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := get(); got != "" {
+		t.Fatalf("非法 scan_mode 应回落为空: %q", got)
+	}
+}
+
 func TestConfigTargetsRoundTrip(t *testing.T) {
 	s, cfg := newTestServer(t)
 

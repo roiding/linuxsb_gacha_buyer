@@ -44,6 +44,12 @@ func (c *Client) FetchMarketFiltered(rarity, sort string) ([]market.Listing, err
 	return c.FetchMarketPaged(MarketQuery{Rarity: rarity, Sort: sort}, nil)
 }
 
+// FetchMarketDefaultPage 抓取市场默认页（最新发布排序，仅第 1 页，共 1 次请求）。
+// fast 扫描模式用它做单请求快扫，只覆盖最新上架的 24 条。
+func (c *Client) FetchMarketDefaultPage() ([]market.Listing, error) {
+	return c.fetchMarketPage(MarketQuery{}, 1)
+}
+
 // MarketPage 每页在售条数（当前站点 24 条/页）。
 const marketPageSize = 24
 

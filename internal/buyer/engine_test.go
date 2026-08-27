@@ -475,6 +475,63 @@ func TestFetchBuyablesPerCategoryRequests(t *testing.T) {
 	}
 }
 
+// fast 扫描模式：无论启用多少分类，每轮只请求市场默认页 1 次（不带筛选/排序/分页参数），
+// 候选由 match 按限价过滤；手动指定 thorough 时即使间隔 ≤10s 也按分类价格升序翻页。
+func TestFetchBuyablesScanModeDispatch(t *testing.T) {
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gacha_market" {
+			http.NotFound(w, r)
+			return
+		}
+		q := r.URL.Query()
+		hits = append(hits, q.Get("rarity")+"|"+q.Get("sort")+"|"+q.Get("p"))
+		switch q.Get("rarity") {
+		case "n":
+			fmt.Fprint(w, mktPage([]string{mktCard(1, "路人甲", "n", 3)}))
+		case "r":
+			fmt.Fprint(w, mktPage([]string{mktCard(2, "夜猫子", "r", 5)}))
+		default:
+			fmt.Fprint(w, mktPage([]string{
+				mktCard(1, "路人甲", "n", 3),
+				mktCard(2, "夜猫子", "r", 5),
+			}))
+		}
+	}))
+	defer srv.Close()
+
+	cfg := config.Defaults()
+	cfg.Rules = config.PriceRules{N: 4, R: 10}
+	cfg.Site = srv.URL
+	c, _ := site.NewClient(&cfg, nil)
+	e := mkEngine(t, cfg.Rules)
+	e.cfg = &cfg
+
+	// 间隔 5s（≤10s）自动走 fast：恰好 1 个默认页请求，无任何筛选参数
+	cfg.ScanSec = 5
+	listings, err := e.fetchBuyables(c, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0] != "||" {
+		t.Fatalf("fast 模式应只请求默认页 1 次且不带筛选参数: %v", hits)
+	}
+	if len(listings) != 2 {
+		t.Fatalf("fast 模式应返回默认页全部在售: %+v", listings)
+	}
+
+	// 间隔 5s 但手动指定 thorough：强制按分类价格升序翻页
+	hits = nil
+	cfg.ScanMode = "thorough"
+	listings, err = e.fetchBuyables(c, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 || hits[0] != "n|price_asc|" || hits[1] != "r|price_asc|" {
+		t.Fatalf("手动 thorough 应按分类价格升序翻页: %v", hits)
+	}
+}
+
 // 称号目录缓存：定向名全部命中后第二次调用不再请求目录页。
 func TestRaritiesWithTargetsCachesCatalog(t *testing.T) {
 	var catalogHits int

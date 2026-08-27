@@ -153,6 +153,9 @@ type Config struct {
 	MinBalance int                   `json:"min_balance"`
 	DryRun     bool                  `json:"dry_run"`
 	ScanSec    int                   `json:"scan_sec"`
+	// ScanMode 市场扫描方式：""=按扫描间隔自动选择，fast=只扫默认页（每轮 1 请求），
+	// thorough=按分类价格升序翻页（覆盖便宜存量）。
+	ScanMode string `json:"scan_mode,omitempty"`
 
 	Subs      []SubAccount       `json:"subs"`
 	Collector Collector          `json:"collector"`
@@ -187,6 +190,12 @@ func (c *Config) Normalize() {
 	}
 	if c.ScanSec < 1 {
 		c.ScanSec = 1
+	}
+	switch strings.ToLower(strings.TrimSpace(c.ScanMode)) {
+	case "fast", "thorough":
+		c.ScanMode = strings.ToLower(strings.TrimSpace(c.ScanMode))
+	default:
+		c.ScanMode = "" // 非法值回落为自动
 	}
 	if c.MinBalance < 0 {
 		c.MinBalance = 0
@@ -228,6 +237,19 @@ func (c *Config) Normalize() {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8080"
 	}
+}
+
+// EffectiveScanMode 返回实际生效的扫描方式："fast"=只扫默认页（每轮 1 请求），
+// "thorough"=按分类价格升序翻页。未显式配置（scan_mode=""）时按扫描间隔自动选择：
+// 间隔 ≤10 秒用 fast 快扫（快），>10 秒用 thorough（彻底，间隔内上架可能超过 1 页）。
+func (c *Config) EffectiveScanMode() string {
+	if c.ScanMode == "fast" || c.ScanMode == "thorough" {
+		return c.ScanMode
+	}
+	if c.ScanSec <= 10 {
+		return "fast"
+	}
+	return "thorough"
 }
 
 // CollectorDryRun 归集是否走 dry-run（复用全局开关）。
