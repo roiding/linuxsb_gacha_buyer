@@ -2,6 +2,7 @@
 package site
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -9,12 +10,14 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/html"
@@ -23,6 +26,14 @@ import (
 )
 
 const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+const (
+	// requestTimeout 单次请求超时。站点偶发慢响应会超过 20s 才返回头部，
+	// 超时导致整轮扫描被跳过；放宽到 30s 并配合 get 的瞬时故障重试。
+	requestTimeout = 30 * time.Second
+	// getRetries 网络层瞬时故障（超时/连接中断）的重试次数。GET 幂等，重试安全。
+	getRetries = 2
+)
 
 // Client 是绑定单个账号的站点客户端，cookie 自动随请求携带。
 type Client struct {
@@ -58,7 +69,7 @@ func NewClientFor(cfg *config.Config, username, password string, logf func(strin
 		jar:      jar,
 		logf:     logf,
 		http: &http.Client{
-			Timeout: 20 * time.Second,
+			Timeout: requestTimeout,
 			Jar:     jar,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
@@ -86,8 +97,28 @@ func (c *Client) ImportCookies(cookies []*http.Cookie) {
 	c.jar.SetCookies(u, cookies)
 }
 
-// get 请求页面并返回响应体（自动带 UA 与 Referer）。
+// get 请求页面并返回响应体（自动带 UA 与 Referer）。GET 幂等：
+// 网络层瞬时故障（超时/连接被拒或重置/连接被提前关闭）自动重试 getRetries 次，
+// 退避递增；全部失败才把错误交给上层。
 func (c *Client) get(path string) (int, []byte, error) {
+	var status int
+	var body []byte
+	var err error
+	for attempt := 0; attempt <= getRetries; attempt++ {
+		status, body, err = c.getOnce(path)
+		if err == nil || !isTransientNetError(err) {
+			return status, body, err
+		}
+		if attempt < getRetries {
+			c.logf("请求 %s 网络异常（%v），第 %d/%d 次重试", path, err, attempt+1, getRetries)
+			time.Sleep(time.Duration(300*(attempt+1)) * time.Millisecond)
+		}
+	}
+	return status, body, err
+}
+
+// getOnce 执行单次 GET。
+func (c *Client) getOnce(path string) (int, []byte, error) {
 	req, err := http.NewRequest(http.MethodGet, c.base+path, nil)
 	if err != nil {
 		return 0, nil, err
@@ -101,6 +132,30 @@ func (c *Client) get(path string) (int, []byte, error) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	return resp.StatusCode, body, err
+}
+
+// isTransientNetError 判断是否网络层瞬时故障（GET 幂等，重试安全）：
+// 客户端超时、连接超时、连接被拒/重置、连接被对方提前关闭（EOF）。
+func isTransientNetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	for _, sentinel := range []error{
+		syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.EPIPE,
+		io.EOF, io.ErrUnexpectedEOF,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
 }
 
 // RawGet 供外部探测用的 GET（跟随 cookie 会话）。

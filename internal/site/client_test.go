@@ -1,8 +1,19 @@
 package site
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+
+	"gacha-buyer/internal/config"
 )
 
 func TestSolveCaptcha(t *testing.T) {
@@ -73,5 +84,100 @@ func TestFindTrapName(t *testing.T) {
 	}
 	if n := findTrapName("<p>none</p>"); n != "" {
 		t.Errorf("应返回空，得到 %q", n)
+	}
+}
+
+// get 对瞬时故障（连接被提前关闭）自动重试：第一次失败、第二次成功时只重试 1 次。
+func TestGetRetriesTransientFailure(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		n := attempts
+		mu.Unlock()
+		if n == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "no hijack", http.StatusInternalServerError)
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err == nil {
+				conn.Close()
+			}
+			return
+		}
+		fmt.Fprint(w, "ok")
+	}))
+	defer srv.Close()
+
+	cfg := config.Defaults()
+	cfg.Site = srv.URL
+	c, err := NewClient(&cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body, err := c.get("/x")
+	if err != nil || status != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("重试后应成功: status=%d body=%q err=%v", status, body, err)
+	}
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != 2 {
+		t.Fatalf("应重试 1 次共 2 次尝试: %d", got)
+	}
+}
+
+// 持续瞬时故障：getRetries 次重试全部失败后才把错误交给上层。
+func TestGetRetriesExhausted(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "no hijack", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+
+	cfg := config.Defaults()
+	cfg.Site = srv.URL
+	c, _ := NewClient(&cfg, nil)
+	if _, _, err := c.get("/x"); err == nil {
+		t.Fatal("全部重试失败后应返回错误")
+	}
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != getRetries+1 {
+		t.Fatalf("应尝试 %d 次: %d", getRetries+1, got)
+	}
+}
+
+func TestIsTransientNetError(t *testing.T) {
+	if !isTransientNetError(context.DeadlineExceeded) {
+		t.Fatal("DeadlineExceeded 应视为瞬时错误")
+	}
+	if !isTransientNetError(&url.Error{Op: "Get", URL: "https://x", Err: syscall.ECONNRESET}) {
+		t.Fatal("url.Error 包裹的连接重置应视为瞬时错误")
+	}
+	if !isTransientNetError(&url.Error{Op: "Get", URL: "https://x", Err: io.ErrUnexpectedEOF}) {
+		t.Fatal("提前关闭连接应视为瞬时错误")
+	}
+	if isTransientNetError(errors.New("页面缺少挂牌卡片")) {
+		t.Fatal("业务错误不应重试")
+	}
+	if isTransientNetError(nil) {
+		t.Fatal("nil 不应视为瞬时错误")
 	}
 }
