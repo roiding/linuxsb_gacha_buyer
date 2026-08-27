@@ -19,6 +19,39 @@ async function api(path, opts) {
   return data;
 }
 
+// ---- 记录分页 ----
+const PAGE_SIZE = 50;
+let recordsPage = 1;
+let transfersPage = 1;
+
+// renderPager 更新分页条：隐藏/显示、页码信息、按钮禁用状态。
+function renderPager(pagerId, infoId, d) {
+  const pager = $(pagerId), info = $(infoId);
+  const total = d.total || 0;
+  const totalPages = d.total_pages || 0;
+  const page = d.page || 1;
+  if (!total) { pager.hidden = true; return; }
+  pager.hidden = false;
+  info.textContent = `第 ${page} / ${totalPages} 页 · 共 ${total} 条`;
+  const prev = pager.querySelector('[data-act="prev"]');
+  const next = pager.querySelector('[data-act="next"]');
+  prev.disabled = page <= 1;
+  next.disabled = page >= totalPages;
+}
+
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-pager]");
+  if (!btn) return;
+  const dir = btn.dataset.act === "next" ? 1 : -1;
+  if (btn.dataset.pager === "records") {
+    recordsPage = Math.max(1, recordsPage + dir);
+    refreshRecords();
+  } else if (btn.dataset.pager === "transfers") {
+    transfersPage = Math.max(1, transfersPage + dir);
+    refreshTransfers();
+  }
+});
+
 let toastTimer;
 function notify(message, error = false) {
   const el = $("#toast");
@@ -167,11 +200,20 @@ $("#btn-bulk-cancel").addEventListener("click", async () => {
 
 async function refreshRecords() {
   try {
-    const d = await api("/api/purchases?limit=300");
+    const d = await api(`/api/purchases?page=${recordsPage}&page_size=${PAGE_SIZE}`);
+    // 记录只增不减，若新数据把当前页挤到末页之后，回到最后一页重取
+    if (d.total_pages > 0 && recordsPage > d.total_pages) {
+      recordsPage = d.total_pages;
+      return refreshRecords();
+    }
     $("#total-spent").textContent = d.total_spent;
     $("#ok-count").textContent = d.ok_count;
+    renderPager("records-pager", "records-pager-info", d);
     const tb = $("#records-table tbody");
     tb.innerHTML = "";
+    if (!(d.records || []).length) {
+      tb.innerHTML = `<tr><td colspan="6" class="empty">暂无购买记录。</td></tr>`;
+    }
     for (const p of d.records || []) {
       const confirmed = !!p.confirmed || (!Object.prototype.hasOwnProperty.call(p, "confirmed") && !!p.ok && !p.dry_run);
       const submitted = !!p.submitted || confirmed || !!p.dry_run;
@@ -492,7 +534,11 @@ $("#collector-form").addEventListener("submit", async (ev) => {
 
 async function refreshTransfers() {
   try {
-    const d = await api("/api/transfers");
+    const d = await api(`/api/transfers?page=${transfersPage}&page_size=${PAGE_SIZE}`);
+    if (d.total_pages > 0 && transfersPage > d.total_pages) {
+      transfersPage = d.total_pages;
+      return refreshTransfers();
+    }
     const s = d.status || {};
     const plans = s.plans || [];
     const done = plans.filter(p => p.status === "completed").length;
@@ -545,6 +591,10 @@ async function refreshTransfers() {
         <td class="${cls}">${label}${verify} · ${esc(t.message || "")}</td>`;
       tb.appendChild(tr);
     }
+    if (!(d.transfers || []).length) {
+      tb.innerHTML = `<tr><td colspan="7" class="empty">暂无归集记录。</td></tr>`;
+    }
+    renderPager("transfers-pager", "transfers-pager-info", d);
   } catch (e) { console.error(e); }
 }
 

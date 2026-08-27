@@ -116,7 +116,12 @@ const indexHTML = `<!doctype html>
         <div class="section-head"><div><p class="eyebrow">PURCHASE HISTORY</p><h2>购买记录</h2><p class="hint">真实成交共 <b id="ok-count">0</b> 笔，累计花费 <b id="total-spent">0</b> 积分。</p></div></div>
         <div class="table-card"><div class="table-wrap"><table id="records-table">
           <thead><tr><th>时间</th><th>称号</th><th>稀有度</th><th>单价 × 数量</th><th>花费</th><th>结果</th></tr></thead><tbody></tbody>
-        </table></div></div>
+        </table></div>
+        <div class="pager" id="records-pager" hidden>
+          <button type="button" data-pager="records" data-act="prev">‹ 上一页</button>
+          <span class="pager-info" id="records-pager-info"></span>
+          <button type="button" data-pager="records" data-act="next">下一页 ›</button>
+        </div></div>
       </section>
 
       <section id="tab-accounts" class="tab">
@@ -170,7 +175,12 @@ const indexHTML = `<!doctype html>
         </table></div></div>
         <div class="table-card"><div class="table-wrap"><table id="transfers-table">
           <thead><tr><th>时间</th><th>小号</th><th>签到</th><th>余额</th><th>打赏金额</th><th>帖子</th><th>结果</th></tr></thead><tbody></tbody>
-        </table></div></div>
+        </table></div>
+        <div class="pager" id="transfers-pager" hidden>
+          <button type="button" data-pager="transfers" data-act="prev">‹ 上一页</button>
+          <span class="pager-info" id="transfers-pager-info"></span>
+          <button type="button" data-pager="transfers" data-act="next">下一页 ›</button>
+        </div></div>
       </section>
 
       <section id="tab-settings" class="tab">

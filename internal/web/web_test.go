@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gacha-buyer/internal/accounts"
 	"gacha-buyer/internal/buyer"
@@ -210,6 +211,76 @@ func TestConfigScanModeRoundTrip(t *testing.T) {
 	}
 	if got := get(); got != "" {
 		t.Fatalf("非法 scan_mode 应回落为空: %q", got)
+	}
+}
+
+func TestPurchasesPagination(t *testing.T) {
+	s, _ := newTestServer(t)
+	for i := 1; i <= 5; i++ {
+		if err := s.st.Add(store.Purchase{Time: time.Now(), ListingID: i, Name: "卡", Price: i, Qty: 1, Cost: i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/purchases?page=2&page_size=2", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /api/purchases: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Records    []map[string]any `json:"records"`
+		Total      int              `json:"total"`
+		Page       int              `json:"page"`
+		PageSize   int              `json:"page_size"`
+		TotalPages int              `json:"total_pages"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 5 || out.Page != 2 || out.PageSize != 2 || out.TotalPages != 3 || len(out.Records) != 2 {
+		t.Fatalf("分页元数据错误: total=%d page=%d size=%d pages=%d rows=%d",
+			out.Total, out.Page, out.PageSize, out.TotalPages, len(out.Records))
+	}
+
+	// 越界页返回空列表但元数据正确
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/purchases?page=9&page_size=2", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 5 || out.TotalPages != 3 || len(out.Records) != 0 {
+		t.Fatalf("越界页错误: total=%d pages=%d rows=%d", out.Total, out.TotalPages, len(out.Records))
+	}
+}
+
+func TestTransfersPagination(t *testing.T) {
+	s, _ := newTestServer(t)
+	for i := 1; i <= 3; i++ {
+		if err := s.d.AddTransfer(&db.TransferRow{Time: time.Now(), AccountID: i, Sub: "小号", TipAmount: i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/transfers?page=2&page_size=2", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /api/transfers: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Transfers  []map[string]any `json:"transfers"`
+		Total      int              `json:"total"`
+		Page       int              `json:"page"`
+		TotalPages int              `json:"total_pages"`
+		Status     map[string]any   `json:"status"`
+		Gacha      []any            `json:"gacha"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 3 || out.Page != 2 || out.TotalPages != 2 || len(out.Transfers) != 1 {
+		t.Fatalf("归集分页错误: total=%d page=%d pages=%d rows=%d",
+			out.Total, out.Page, out.TotalPages, len(out.Transfers))
+	}
+	if out.Status == nil || out.Gacha == nil {
+		t.Fatal("status/gacha 载荷应保留")
 	}
 }
 

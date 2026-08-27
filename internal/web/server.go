@@ -109,21 +109,42 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePurchases(w http.ResponseWriter, r *http.Request) {
-	recs := s.st.All()
-	limit := 200
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 1000 {
-			limit = n
-		}
-	}
-	if len(recs) > limit {
-		recs = recs[:limit]
-	}
+	page, pageSize, offset := pageParams(r)
+	total := s.st.CountPurchases()
 	writeJSON(w, map[string]any{
-		"records":     recs,
+		"records":     s.st.PurchasesPage(offset, pageSize),
+		"total":       total,
+		"page":        page,
+		"page_size":   pageSize,
+		"total_pages": totalPages(total, pageSize),
 		"total_spent": s.st.TotalSpent(),
 		"ok_count":    s.st.CountOK(),
 	})
+}
+
+// pageParams 解析 page/page_size 查询参数：page 从 1 开始，page_size 限制 1..200（默认 50），
+// 返回 (page, pageSize, offset)。
+func pageParams(r *http.Request) (int, int, int) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize < 1 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	return page, pageSize, (page - 1) * pageSize
+}
+
+// totalPages 向上取整的页数；无记录返回 0。
+func totalPages(total, pageSize int) int {
+	if total <= 0 {
+		return 0
+	}
+	return (total + pageSize - 1) / pageSize
 }
 
 // handleConfig GET 返回配置（隐藏密码），POST 更新并落盘。

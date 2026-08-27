@@ -181,16 +181,22 @@ func (s *Server) handlePatrolOnce(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "message": "巡检已开始"})
 }
 
-// handleTransfers GET 归集记录。
+// handleTransfers GET 归集记录（归集表分页；抽卡表数量少，仍取最近 100 条）。
 func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
+	page, pageSize, offset := pageParams(r)
+	total := s.col.TransfersCount()
 	gacha, err := s.d.ListGachaDraws(100)
 	if err != nil {
 		gacha = nil
 	}
 	writeJSON(w, map[string]any{
-		"transfers": s.col.Transfers(),
-		"status":    s.col.Snapshot(),
-		"gacha":     gacha,
+		"transfers":   s.col.TransfersPage(offset, pageSize),
+		"total":       total,
+		"page":        page,
+		"page_size":   pageSize,
+		"total_pages": totalPages(total, pageSize),
+		"status":      s.col.Snapshot(),
+		"gacha":       gacha,
 	})
 }
 

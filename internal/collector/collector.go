@@ -809,12 +809,25 @@ func (e *Engine) pickMainTopic(sub *site.Client, cfg config.Config) (int, error)
 	return topics[rand.Intn(len(topics))], nil
 }
 
-// Transfers 返回新到旧的归集记录。
+// Transfers 返回新到旧的归集记录（最多 500 条；分页请用 TransfersPage）。
 func (e *Engine) Transfers() []TransferLog {
-	rows, err := e.d.ListTransfers(500)
+	return e.TransfersPage(0, 500)
+}
+
+// TransfersPage 分页返回归集记录（新→旧，offset 从 0 开始）。
+func (e *Engine) TransfersPage(offset, limit int) []TransferLog {
+	rows, err := e.d.ListTransfersPage(offset, limit)
 	if err != nil {
 		return []TransferLog{}
 	}
+	return transferLogs(rows)
+}
+
+// TransfersCount 归集记录总数。
+func (e *Engine) TransfersCount() int { return e.d.CountTransfers() }
+
+// transferLogs 把 db 行映射为前端展示模型。
+func transferLogs(rows []*db.TransferRow) []TransferLog {
 	out := make([]TransferLog, len(rows))
 	for i, row := range rows {
 		out[i] = TransferLog{

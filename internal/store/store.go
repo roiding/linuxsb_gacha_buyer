@@ -37,6 +37,22 @@ func (s *Store) All() []Purchase {
 	return out
 }
 
+// PurchasesPage 分页返回购买记录（新→旧，offset 从 0 开始）。
+func (s *Store) PurchasesPage(offset, limit int) []Purchase {
+	rows, err := s.d.ListPurchasesPage(offset, limit)
+	if err != nil {
+		return nil
+	}
+	out := make([]Purchase, len(rows))
+	for i, r := range rows {
+		out[i] = *r
+	}
+	return out
+}
+
+// CountPurchases 购买记录总数。
+func (s *Store) CountPurchases() int { return s.d.CountPurchases() }
+
 // TotalSpent 真实成交总花费。
 func (s *Store) TotalSpent() int {
 	st, err := s.d.GetPurchaseStats()

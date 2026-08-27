@@ -33,9 +33,23 @@ func (d *DB) AddPurchase(p *PurchaseRow) error {
 
 const purchaseCols = `time, listing_id, name, rarity, price, qty, cost, dry_run, ok, submitted, confirmed, message`
 
-// ListPurchases 新→旧分页。
+// ListPurchases 新→旧，最多 limit 条（兼容旧调用；分页请用 ListPurchasesPage）。
 func (d *DB) ListPurchases(limit int) ([]*PurchaseRow, error) {
-	rows, err := d.Query(`SELECT `+purchaseCols+` FROM purchases ORDER BY id DESC LIMIT ?`, limit)
+	return d.ListPurchasesPage(0, limit)
+}
+
+// CountPurchases 购买记录总数。
+func (d *DB) CountPurchases() int {
+	var n int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM purchases`).Scan(&n); err != nil {
+		return 0
+	}
+	return n
+}
+
+// ListPurchasesPage 新→旧分页查询（offset 从 0 开始）。
+func (d *DB) ListPurchasesPage(offset, limit int) ([]*PurchaseRow, error) {
+	rows, err := d.Query(`SELECT `+purchaseCols+` FROM purchases ORDER BY id DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -135,10 +149,24 @@ func (d *DB) AddTransferPending(t *TransferRow) (int64, error) {
 	return result.LastInsertId()
 }
 
-// ListTransfers 新→旧分页。
+// ListTransfers 新→旧，最多 limit 条（兼容旧调用；分页请用 ListTransfersPage）。
 func (d *DB) ListTransfers(limit int) ([]*TransferRow, error) {
+	return d.ListTransfersPage(0, limit)
+}
+
+// CountTransfers 归集记录总数。
+func (d *DB) CountTransfers() int {
+	var n int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM transfers`).Scan(&n); err != nil {
+		return 0
+	}
+	return n
+}
+
+// ListTransfersPage 新→旧分页查询（offset 从 0 开始）。
+func (d *DB) ListTransfersPage(offset, limit int) ([]*TransferRow, error) {
 	rows, err := d.Query(`SELECT time, account_id, sub, check_in, balance, balance_before, balance_after, tip_amount, topic_id, dry_run, ok, submitted, confirmed, pending, retryable, http_status, attempt, message
-		FROM transfers ORDER BY id DESC LIMIT ?`, limit)
+		FROM transfers ORDER BY id DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}

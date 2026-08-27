@@ -53,6 +53,56 @@ func TestPurchaseJSONAndConfirmedStats(t *testing.T) {
 	}
 }
 
+func TestPurchasePagination(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "page.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for i := 1; i <= 5; i++ {
+		if err := d.AddPurchase(&PurchaseRow{Time: time.Now(), ListingID: i, Name: "卡", Price: i, Qty: 1, Cost: i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := d.CountPurchases(); got != 5 {
+		t.Fatalf("CountPurchases=%d want 5", got)
+	}
+	page1, err := d.ListPurchasesPage(0, 2)
+	if err != nil || len(page1) != 2 {
+		t.Fatalf("ListPurchasesPage(0,2): %v rows=%d", err, len(page1))
+	}
+	if page1[0].ListingID != 5 || page1[1].ListingID != 4 {
+		t.Fatalf("第一页应是最新 2 条: %d %d", page1[0].ListingID, page1[1].ListingID)
+	}
+	tail, err := d.ListPurchasesPage(4, 2)
+	if err != nil || len(tail) != 1 || tail[0].ListingID != 1 {
+		t.Fatalf("末页应只剩 1 条: %v %+v", err, tail)
+	}
+}
+
+func TestTransferPagination(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "tpage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for i := 1; i <= 4; i++ {
+		if err := d.AddTransfer(&TransferRow{Time: time.Now(), AccountID: i, Sub: "sub", TipAmount: i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := d.CountTransfers(); got != 4 {
+		t.Fatalf("CountTransfers=%d want 4", got)
+	}
+	page2, err := d.ListTransfersPage(2, 2)
+	if err != nil || len(page2) != 2 {
+		t.Fatalf("ListTransfersPage(2,2): %v rows=%d", err, len(page2))
+	}
+	if page2[0].TipAmount != 2 || page2[1].TipAmount != 1 {
+		t.Fatalf("第二页应是最旧 2 条: %d %d", page2[0].TipAmount, page2[1].TipAmount)
+	}
+}
+
 func TestLotteryReplyDedupAndCooldown(t *testing.T) {
 	d, err := Open(filepath.Join(t.TempDir(), "lottery.db"))
 	if err != nil {
